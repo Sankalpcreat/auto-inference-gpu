@@ -19,7 +19,6 @@ from .moe_triton import grouped_gemv, moe_t1
 from .moe_packed import load_packed, packed_gemv
 from . import fused_t1 as FT
 from . import blend_triton as BT
-from . import mix_triton as MT
 from .fp8_dense import fp8_gemv, quantize
 
 VISITS = [(i, 0) for i in range(CORE.start)] + [(i, p) for p in range(PASSES) for i in CORE] + \
@@ -279,8 +278,8 @@ class InklingV1(InklingV0):
         """One layer visit at T=1 through the compiled regions (same math as the generic body)."""
         lw, t = self.layers[i], self.t1[i]
         if p > 0:
-            base = MT.mix(stack[:nb] + [partial], self.attn_q[i])
-            msgs = MT.mix(bank, self.msg_q[i - CORE.start])
+            base = FT.mix(stack[:nb] + [partial], self.attn_q[i])
+            msgs = FT.mix(bank, self.msg_q[i - CORE.start])
             if base.shape[0] == 1:
                 base = base.expand(3, -1, -1)
             nw = lw["attn_norm"] if lw["attn_norm"].shape[0] == 3 else lw["attn_norm"].expand(3, -1)
@@ -288,7 +287,7 @@ class InklingV1(InklingV0):
         elif v == 0:
             xin = (rms(partial)[None] * lw["attn_norm"].float()[:, None, :]).to(torch.bfloat16)
         else:
-            xin = MT.mix_norm(stack[:nb] + [partial], self.attn_q[i], lw["attn_norm"])
+            xin = FT.mix_norm(stack[:nb] + [partial], self.attn_q[i], lw["attn_norm"])
         xq = xin[0]
         xk = xin[1] if xin.shape[0] == 3 else xq
         xv = xin[2] if xin.shape[0] == 3 else xq
@@ -301,9 +300,9 @@ class InklingV1(InklingV0):
         first = i % BLOCK == 0
         src = stack[:nb + 1] + [attn_out] if first else stack[:nb] + [partial.float() + attn_out.float()]
         if p > 0:
-            mlp_in = BT.blend(MT.mix(src, self.mlp_q[i]), msgs[3:], *t["ctl1"], lw["mlp_norm.weight"][None])[0]
+            mlp_in = BT.blend(FT.mix(src, self.mlp_q[i]), msgs[3:], *t["ctl1"], lw["mlp_norm.weight"][None])[0]
         else:
-            mlp_in = MT.mix_norm(src, self.mlp_q[i], lw["mlp_norm.weight"][None])[0]
+            mlp_in = FT.mix_norm(src, self.mlp_q[i], lw["mlp_norm.weight"][None])[0]
         ids, w = FT.router(mlp_in, t["gw"], t["gb"])
         pk = self.packed[i]
         gu = packed_gemv(pk["w13"], mlp_in[0].contiguous(), ids, True)
