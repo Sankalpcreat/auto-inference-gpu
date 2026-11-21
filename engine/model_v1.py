@@ -81,8 +81,8 @@ class InklingV1(InklingV0):
         self.cache = {"cap": 0, "visits": [dict() for _ in VISITS]}
         for (i, _), c in zip(VISITS, self.cache["visits"]):
             if i not in GLOBAL:
-                c["K"] = torch.zeros(HKV, WINDOW, HD, device=self.dev)
-                c["V"] = torch.zeros(HKV, WINDOW, HD, device=self.dev)
+                c["K"] = torch.zeros(HKV, WINDOW, HD, device=self.dev, dtype=torch.bfloat16)
+                c["V"] = torch.zeros(HKV, WINDOW, HD, device=self.dev, dtype=torch.bfloat16)
         self.tok = torch.zeros(1, dtype=torch.long, device=self.dev)      # static decode input / output
         self.pos = torch.zeros(1, dtype=torch.long, device=self.dev)
         self.graphs = {}
@@ -124,8 +124,8 @@ class InklingV1(InklingV0):
         cap = max(4096, 1 << (need - 1).bit_length())
         for (i, _), c in zip(VISITS, self.cache["visits"]):
             if i in GLOBAL:
-                c["K"] = torch.zeros(HKV, cap, HD, device=self.dev)
-                c["V"] = torch.zeros(HKV, cap, HD, device=self.dev)
+                c["K"] = torch.zeros(HKV, cap, HD, device=self.dev, dtype=torch.bfloat16)
+                c["V"] = torch.zeros(HKV, cap, HD, device=self.dev, dtype=torch.bfloat16)
         self.cache["cap"] = cap
         self.ar = torch.arange(cap, device=self.dev)
         self.graphs = {}                                                  # buffer pointers changed

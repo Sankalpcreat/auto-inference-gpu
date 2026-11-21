@@ -10,6 +10,7 @@ import torch.nn.functional as F
 from .model_v0 import (ALPHA, DREL, EPS, GATE_CAP, H, HD, HKV, N_FLOOR, QK_CLIP, REL_CLIP, ROUTE_SCALE, TOPK,
                        UP_CAP, attn_res, l2_clip, rms)
 from .fp8_dense import fp8_gemv
+from .attn_t1 import attn_partial
 
 for _k, _v in (("cache_size_limit", 512), ("accumulated_cache_size_limit", 4096)):
     if hasattr(torch._dynamo.config, _k):
@@ -58,11 +59,15 @@ def _qkv(xq, xk, xv, w, k, v):
     return qc, rc, gate, sinks, k, v
 
 
-def _attend(qc, rel_bias, K, V, gate, sinks, wo):
-    scores = (qc.float().view(HKV, H // HKV, HD) @ K.transpose(1, 2)) * HD ** -0.5
-    scores = scores + rel_bias.view(HKV, H // HKV, -1)
-    lse = scores.logsumexp(-1).view(1, H)
-    out = (scores.softmax(-1) @ V).view(1, H, HD)
+def _attend(qc, rel_bias, K, V, S, gate, sinks, wo):
+    """rel_bias (H, S) fp32 (-inf masked); K/V (HKV, cap, HD) bf16, first S keys used."""
+    m, l, acc = attn_partial(qc.float().view(H, HD).contiguous(), rel_bias.contiguous(), K, V, S)
+    M = m.amax(1)
+    Ms = torch.where(M == float("-inf"), torch.zeros_like(M), M)
+    w = torch.exp(m - Ms[:, None])
+    L = (l * w).sum(1)
+    out = ((acc * w[..., None]).sum(1) / L[:, None]).view(1, H, HD)
+    lse = (Ms + torch.log(L)).view(1, H)
     out = out * torch.sigmoid(gate.float().view(1, H, HD)) * torch.sigmoid(lse - sinks)[..., None]
     return _lin(out.to(BF).reshape(1, H * HD), wo, "wo")
 
@@ -74,10 +79,10 @@ def attn_local(xq, xk, xv, w, hk, hv, ha, K, V, slot, ldist, ladd):
     v = _conv(_lin(xv, w, "wv"), hv, w["vT"])
     qc, rc, gate, sinks, k, v = _qkv(xq, xk, xv, w, k, v)
     rel = torch.einsum("thd,de->the", rc.float(), w["relp"])
-    K.index_copy_(1, slot, k.transpose(0, 1).float())
-    V.index_copy_(1, slot, v.transpose(0, 1).float())
+    K.index_copy_(1, slot, k.transpose(0, 1))
+    V.index_copy_(1, slot, v.transpose(0, 1))
     bias = rel[0][:, ldist] + ladd
-    a = _attend(qc, bias, K, V, gate, sinks, w)
+    a = _attend(qc, bias, K, V, bias.shape[1], gate, sinks, w)
     return _conv(a, ha, w["aT"])
 
 
@@ -92,10 +97,10 @@ def attn_global(xq, xk, xv, w, hk, hv, ha, K, V, pos, gidx, gmul, gadd):
     qc = (qc.float() * tau[:, None, None]).to(BF)
     rc = (rc.float() * tau[:, None, None]).to(BF)
     rel = torch.einsum("thd,de->the", rc.float(), w["relp"])
-    K.index_copy_(1, pos, k.transpose(0, 1).float())
-    V.index_copy_(1, pos, v.transpose(0, 1).float())
+    K.index_copy_(1, pos, k.transpose(0, 1))
+    V.index_copy_(1, pos, v.transpose(0, 1))
     bias = rel[0][:, gidx] * gmul + gadd
-    a = _attend(qc, bias, K[:, :B], V[:, :B], gate, sinks, w)
+    a = _attend(qc, bias, K, V, B, gate, sinks, w)
     return _conv(a, ha, w["aT"])
 
 
