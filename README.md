@@ -5,7 +5,7 @@ with our own engine (PyTorch + Triton + CUDA; no vLLM/SGLang at runtime). See [D
 
 Status:
 - [x] Phase 0: checkpoint format decoded and verified (NVFP4 + MXFP8 experts), bytes-per-token budget (≈ 5.4 GB/token → ~240 tok/s ceiling at batch 1)
-- [ ] Phase 1: engine v0 (correct, BF16)
+- [x] Phase 1: engine v0 (plain PyTorch, BF16, full recompute): **ppl 3.06** on English text, "The capital of France is" → " Paris.", fibonacci correct; loads in 5 s, 52 GB
 - [ ] Phase 2: frozen harness + golden logits
 - [ ] Phase 3/4: engine loop + kernel loop
 
