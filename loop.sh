@@ -16,7 +16,7 @@ for i in $(seq 1 "$N"); do
   KEEP=$(awk -F'\t' '$3=="KEEP"||$3=="BASELINE"{c=$2} END{print c}' results.tsv)
   if [ -n "$KEEP" ] && ! git diff --quiet "$KEEP" -- engine; then
     git add -A engine && git commit -q -m "wip (unkept)" 2>/dev/null; git branch -f "discarded/$(date +%m%d-%H%M%S)" HEAD
-    git checkout "$KEEP" -- engine && git add -A engine && git commit -q -m "loop: revert engine/ to last KEEP $KEEP"
+    git rm -r -q --cached engine >/dev/null; rm -rf engine; git checkout "$KEEP" -- engine && git add -A engine && git commit -q -m "loop: revert engine/ to last KEEP $KEEP"
     echo "loop: engine/ reverted to last KEEP $KEEP (unkept work saved on a discarded/ branch)" | tee -a logs/loop.log
   fi
   if grep '"type":"result"' "logs/agent_$i.jsonl" | tail -1 | grep -qE '"api_error_status":429|"api_error":"usage_limit_reached"'; then
