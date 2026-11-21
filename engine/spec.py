@@ -134,6 +134,7 @@ def verify(m, ids, pos0):
         M1._with_hist = saved
 
 
+@torch.inference_mode()
 def commit(m, n, T):
     """Keep the first n of the T verified tokens."""
     for rec in _LOG:
