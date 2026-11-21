@@ -7,7 +7,7 @@ the GPU by the frozen harness `prepare_gpu.py`; KEEP/DISCARD decided by `decide.
 ## Read first (every session)
 `knowledge/hardware.md` (GPU facts), `knowledge/model.md` (architecture + bytes/token), `knowledge/measured.md`
 (numbers + dead ends), `DESIGN.md` (search space + kernel list), `results.tsv`, `notes.md`, `engine/infer.py`,
-`engine/model_v1.py`. The math reference is `ref/` (frozen copy of the correct engine) — your engine must stay
+`engine/model_v1.py`, and `CHECKLIST.md` (the optimization map: mark what applies, update its coverage table after your experiment). The math reference is `ref/` (frozen copy of the correct engine) — your engine must stay
 numerically faithful to it (the quality gates check).
 
 ## Ranked hypotheses (now 95.98 tok/s ≈ 10.4 ms/token; small-kernel tweaks are at diminishing returns: last 5 tries ≤ +4%)
@@ -31,7 +31,7 @@ see the newest `discarded/` branch; FP8 GEMV retune (8,128,8) is +3% stackable).
 
 ## Rules
 - **Never run anything in the background and never use Monitor**: this session ends when you stop talking, so a background job's result is lost. Run `tools/gpu_script.sh` / `./run_remote.sh` in the foreground with the Bash `timeout` set to 600000 (10 min); keep sweeps under ~8 minutes.
-- Edit only `engine/**`, `notes.md`, `scratch/**`. Never touch `prepare_gpu.py`, `decide.py`, `run_remote.sh`, `tools/`,
+- Edit only `engine/**`, `notes.md`, `scratch/**`, and the coverage table in `CHECKLIST.md`. Never touch `prepare_gpu.py`, `decide.py`, `run_remote.sh`, `tools/`,
   `ref/`, `golden/`, `data/`, `knowledge/`, `program.md`, `results.tsv`, `runs/`.
 - Greedy only, exact max_tokens, no caching by prompt content, no special-casing eval prompts. Faster engine, not a faster benchmark.
 - Never load a second copy of the weights in the harness process (96 GB GPU; the engine uses ~56 GB).
