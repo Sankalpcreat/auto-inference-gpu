@@ -1,0 +1,9 @@
+results.tsv
+runs/
+logs/
+report/
+notes.md
+scratch/
+golden/
+__pycache__/
+.venv/
