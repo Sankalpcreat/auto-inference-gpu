@@ -183,8 +183,8 @@ class InklingV1(InklingV0):
             else:
                 W = min(T, WINDOW)
                 slots = torch.arange(T - W, T, device=xq.device) % WINDOW
-                c["K"][:, slots] = kf[T - W:].transpose(0, 1)
-                c["V"][:, slots] = vf[T - W:].transpose(0, 1)
+                c["K"][:, slots] = kf[T - W:].transpose(0, 1).to(c["K"].dtype)
+                c["V"][:, slots] = vf[T - W:].transpose(0, 1).to(c["V"].dtype)
             dist = pos[:, None] - pos[None, :]
             bias = rel.gather(2, dist.clamp(0, EXT - 1)[:, None, :].expand(-1, H, -1))
             bias = bias.masked_fill(~((dist >= 0) & (dist < EXT))[:, None, :], 0.0)
