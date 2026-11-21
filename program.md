@@ -33,6 +33,7 @@ numerically faithful to it (the quality gates check).
 7. Append to `notes.md`: what, numbers, decision, what it teaches, next idea. Finish with a 3–5 line summary.
 
 ## Rules
+- **Never run anything in the background and never use Monitor**: this session ends when you stop talking, so a background job's result is lost. Run `tools/gpu_script.sh` / `./run_remote.sh` in the foreground with the Bash `timeout` set to 600000 (10 min); keep sweeps under ~8 minutes.
 - Edit only `engine/**`, `notes.md`, `scratch/**`. Never touch `prepare_gpu.py`, `decide.py`, `run_remote.sh`, `tools/`,
   `ref/`, `golden/`, `data/`, `knowledge/`, `program.md`, `results.tsv`, `runs/`.
 - Greedy only, exact max_tokens, no caching by prompt content, no special-casing eval prompts. Faster engine, not a faster benchmark.

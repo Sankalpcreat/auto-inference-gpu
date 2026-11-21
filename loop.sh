@@ -6,7 +6,7 @@ MODEL_FLAG=${MODEL:+--model $MODEL}
 for i in $(seq 1 "$N"); do
   echo "=== experiment $i/$N  $(date +%H:%M:%S)" | tee -a logs/loop.log
   claude -p "Follow program.md exactly: read the knowledge files, results.tsv and notes.md first, run exactly ONE experiment (or one profiling study), update notes.md, then stop." $MODEL_FLAG \
-    --permission-mode acceptEdits \
+    --permission-mode acceptEdits --disallowedTools "Monitor" \
     --allowedTools "Read" "Edit" "Write" "WebSearch" "WebFetch" "Bash(./run_remote.sh*)" "Bash(tools/gpu_script.sh*)" \
                    "Bash(git add*)" "Bash(git commit*)" "Bash(git reset --hard HEAD~1)" "Bash(git log*)" "Bash(git diff*)" "Bash(git status*)" \
                    "Bash(tail*)" "Bash(cat*)" "Bash(grep*)" "Bash(ls*)" "Bash(head*)" "Bash(sed -n*)" "Bash(wc*)" "Bash(python3 -c*)" "Bash(mkdir -p scratch)" \
