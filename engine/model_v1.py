@@ -18,6 +18,7 @@ from .model_v0 import (ALPHA, BLOCK, CORE, DREL, EXT, GLOBAL, H, HD, HKV, L, LOG
 from .moe_triton import grouped_gemv, moe_t1
 from .moe_packed import load_packed, packed_gemv
 from . import fused_t1 as FT
+from . import blend_triton as BT
 from .fp8_dense import fp8_gemv, quantize
 
 VISITS = [(i, 0) for i in range(CORE.start)] + [(i, p) for p in range(PASSES) for i in CORE] + \
@@ -282,7 +283,7 @@ class InklingV1(InklingV0):
             if base.shape[0] == 1:
                 base = base.expand(3, -1, -1)
             nw = lw["attn_norm"] if lw["attn_norm"].shape[0] == 3 else lw["attn_norm"].expand(3, -1)
-            xin = FT.blend(base, msgs[:3], *t["ctl3"], nw)
+            xin = BT.blend(base, msgs[:3], *t["ctl3"], nw)
         elif v == 0:
             xin = (rms(partial)[None] * lw["attn_norm"].float()[:, None, :]).to(torch.bfloat16)
         else:
@@ -299,7 +300,7 @@ class InklingV1(InklingV0):
         first = i % BLOCK == 0
         src = stack[:nb + 1] + [attn_out] if first else stack[:nb] + [partial.float() + attn_out.float()]
         if p > 0:
-            mlp_in = FT.blend(FT.mix(src, self.mlp_q[i]), msgs[3:], *t["ctl1"], lw["mlp_norm.weight"][None])[0]
+            mlp_in = BT.blend(FT.mix(src, self.mlp_q[i]), msgs[3:], *t["ctl1"], lw["mlp_norm.weight"][None])[0]
         else:
             mlp_in = FT.mix_norm(src, self.mlp_q[i], lw["mlp_norm.weight"][None])[0]
         ids, w = FT.router(mlp_in, t["gw"], t["gb"])
