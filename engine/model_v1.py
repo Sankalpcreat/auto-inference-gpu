@@ -15,7 +15,8 @@ import torch.nn.functional as F
 
 from .model_v0 import (ALPHA, BLOCK, CORE, DREL, EXT, GLOBAL, H, HD, HKV, L, LOGIT_CAP, N_FLOOR, PASSES, QK_CLIP,
                        REL_CLIP, STREAMS, VOCAB, WINDOW, InklingV0, attn_res, l2_clip, rms)
-from .moe_triton import moe_t1
+from .moe_triton import grouped_gemv, moe_t1
+from . import fused_t1 as FT
 
 VISITS = [(i, 0) for i in range(CORE.start)] + [(i, p) for p in range(PASSES) for i in CORE] + \
          [(i, 0) for i in range(CORE.stop, L)]
@@ -83,6 +84,7 @@ class InklingV1(InklingV0):
         self.tok = torch.zeros(1, dtype=torch.long, device=self.dev)      # static decode input / output
         self.pos = torch.zeros(1, dtype=torch.long, device=self.dev)
         self.graphs = {}
+        self.t1 = [FT.prep(lw, i, i in GLOBAL, i in CORE, STREAMS) for i, lw in enumerate(self.layers)]
         self.ensure_cap(4096)
 
     def ensure_cap(self, need):
@@ -201,6 +203,9 @@ class InklingV1(InklingV0):
                 bank = [stack[pb + 1], stack[pb + 2]]
                 stack, nb = pblocks + [ppart], pb
             partial = stack[nb]
+            if decode:
+                stack, nb = self._visit_t1(v, i, p, c, stack, nb, partial, bank, pos, dctx)
+                continue
             if p > 0:
                 base = attn_res(stack[:nb] + [partial], self.attn_q[i])
                 msgs = attn_res(bank, self.msg_q[i - CORE.start])
@@ -233,6 +238,46 @@ class InklingV1(InklingV0):
         h = attn_res(stack[:nb] + [stack[nb]], self.out_q, self.norm[None])[0].to(torch.bfloat16)
         logits = (h @ self.unembed.T).float()[:, :VOCAB]
         return LOGIT_CAP * torch.tanh(logits / LOGIT_CAP), cache
+
+    def _visit_t1(self, v, i, p, c, stack, nb, partial, bank, pos, dctx):
+        """One layer visit at T=1 through the compiled regions (same math as the generic body)."""
+        lw, t = self.layers[i], self.t1[i]
+        if p > 0:
+            base = FT.mix(stack[:nb] + [partial], self.attn_q[i])
+            msgs = FT.mix(bank, self.msg_q[i - CORE.start])
+            if base.shape[0] == 1:
+                base = base.expand(3, -1, -1)
+            nw = lw["attn_norm"] if lw["attn_norm"].shape[0] == 3 else lw["attn_norm"].expand(3, -1)
+            xin = FT.blend(base, msgs[:3], *t["ctl3"], nw)
+        elif v == 0:
+            xin = (rms(partial)[None] * lw["attn_norm"].float()[:, None, :]).to(torch.bfloat16)
+        else:
+            xin = FT.mix_norm(stack[:nb] + [partial], self.attn_q[i], lw["attn_norm"])
+        xq = xin[0]
+        xk = xin[1] if xin.shape[0] == 3 else xq
+        xv = xin[2] if xin.shape[0] == 3 else xq
+        if i in GLOBAL:
+            attn_out = FT.attn_global(xq, xk, xv, t["attn"], c["k"], c["v"], c["attn"], c["K"], c["V"], pos,
+                                      dctx["gidx"], dctx["gmul"], dctx["gadd"])
+        else:
+            attn_out = FT.attn_local(xq, xk, xv, t["attn"], c["k"], c["v"], c["attn"], c["K"], c["V"],
+                                     dctx["slot"], dctx["ldist"], dctx["ladd"])
+        first = i % BLOCK == 0
+        src = stack[:nb + 1] + [attn_out] if first else stack[:nb] + [partial.float() + attn_out.float()]
+        if p > 0:
+            mlp_in = FT.blend(FT.mix(src, self.mlp_q[i]), msgs[3:], *t["ctl1"], lw["mlp_norm.weight"][None])[0]
+        else:
+            mlp_in = FT.mix_norm(src, self.mlp_q[i], lw["mlp_norm.weight"][None])[0]
+        ids, w = FT.router(mlp_in, t["gw"], t["gb"])
+        gu = grouped_gemv(lw["w13"], mlp_in[0].contiguous(), ids, True)
+        y = grouped_gemv(lw["w2"], FT.act(gu, w), ids, False)
+        mconv = FT.moe_out_conv(y, c["mlp"], t["mT"])
+        if first:
+            nb += 1
+            new = FT.residual2(attn_out, mconv)
+        else:
+            new = FT.residual(partial, attn_out, mconv)
+        return stack[:nb] + [new], nb
 
     def _step(self, B):
         """One decode step on the static tensors: tok <- argmax(next), pos += 1."""
