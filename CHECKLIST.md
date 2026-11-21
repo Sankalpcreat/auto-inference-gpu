@@ -17,11 +17,13 @@ The list is a map, not a recipe: each item is a direction to measure, never a gu
 | # | Dimension | Options to try | Applies when |
 |---|---|---|---|
 | 4 | **Number formats** | weights FP16/BF16/FP8/INT8/INT4/FP4 (NVFP4, MXFP4) per layer; activations FP16 vs BF16; packed weights + dequant in kernel; output layer separately | always; BF16→FP16 on chips without native BF16 (Apple M1); FP8 on sm_89+; FP4 on sm_120+/Blackwell; fewer bits ≠ faster when dequant is ALU-bound (M1) |
-| 5 | **Memory system** | static buffers, no host syncs, wired memory (Mac), pinned memory, cache limits, memory-mapped loading | always |
+| 5 | **Memory system** | static buffers, no host syncs, wired memory (Mac), pinned memory, cache limits, memory-mapped loading, CPU thread counts, MoE experts offloaded to CPU RAM | always |
 | 6 | **Execution** | CUDA graphs / `mx.compile` / torch.compile, fewer dependent steps, megakernels | always; most important for small models and batch 1 |
 | 7 | **Kernels** | fused norm+matmul, fused MoE (router + grouped GEMV), packed low-bit GEMV, split-K vs tile shape, decode attention (split-KV), Triton / CUDA / Metal / HIP | always; profile first (small GEMVs are often latency-bound, not bandwidth-bound) |
 | 8 | **KV cache** | layout (paged, ring buffer for windows, per-pass for looped models), FP8/INT8 KV, prefix caching (agent loops), sharing across layers/passes, eviction for long chats | models with attention; tiny gains if few layers hold KV (hybrids) |
 | 9 | **Speculative decoding** | n-gram / prompt lookup, the model's own MTP/drafter (DSpark, EAGLE), small draft model, adaptive draft length, tree drafts; needs a cheap multi-token verify (weights read once for K+1 tokens) + rollback of all state | when verify(K+1) ≲ 1.5× a single step; drafter acceptance decides the gain |
+| 10a | **Model-specific** | looped models (pass count, cache sharing across passes), hybrids (DeltaNet/Mamba state kernels), MoE expert prefetch + caching, MLA weight absorption, sliding-window ring buffers | when the model family has the feature |
+| 10b | **Workload-specific** | reasoning-effort per task type, draft length per task type, context-length limits, prompt layout for prefix-cache hits | always (from the workload in #3) |
 | 10 | **Prefill** | chunked prefill, flash attention variant, CPU+GPU co-execution (Apple), prompt caching | long prompts, agent loops, TTFT-sensitive use |
 
 ## C. Dimensions often missed
