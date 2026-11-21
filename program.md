@@ -10,17 +10,14 @@ the GPU by the frozen harness `prepare_gpu.py`; KEEP/DISCARD decided by `decide.
 `engine/model_v1.py`. The math reference is `ref/` (frozen copy of the correct engine) — your engine must stay
 numerically faithful to it (the quality gates check).
 
-## Ranked hypotheses (now at 64.5 tok/s; target: beat vLLM's 10.0 ms/step ≈ 200–400 tok/s with DSpark)
-1. **Re-profile the current graph replay** if notes.md has no profile at 64.5 tok/s (kernel count, time by kernel class, bytes vs time).
-2. **Keep experts packed (NVFP4 layers 0–19, MXFP8 20–23)**: Triton GEMV that dequantizes in registers (E2M1 LUT x FP8-E4M3
-   block scale per 16 x amax/2688; MXFP8: E4M3 x 2^(s-127) per 32). Expert bytes 6 GB → 1.7 GB/token (expect ~−3.5 ms).
-   Must match the BF16-dequant result (same dequant math, fp32 accumulate).
-3. **FP8 dense projections** (wq, gate, wk, wv, wo, wr, sink; per-output-channel scale, weight-only, fp32 accumulate) and
-   **FP8 unembed**: 2.6 → 1.3 GB and 0.93 → 0.46 GB. Lossy: gates decide (NLL +2%, eval ≥ 11/12).
-4. **DSpark speculative decoding** (`/tmp/inkling/mtp.safetensors`, 3 layers, block 8, reads hidden states at visits 5, 23, 41 + final);
-   exact greedy verify of 1+K tokens per step in one graph; needs a T>1 decode path. Then **adaptive K** (draft long only when confident).
-5. Remaining small-kernel fusion (Triton) where the profile says.
-6. Loop-aware ideas: expert overlap across passes, per-pass caches.
+## Ranked hypotheses (now 95.98 tok/s ≈ 10.4 ms/token; small-kernel tweaks are at diminishing returns: last 5 tries ≤ +4%)
+**#1 is speculative decoding — read `knowledge/dspark.md` first.** Work through its stages A → B → C, one per experiment:
+A. T = K+1 verify step with per-visit rollback (K/V write positions, local ring buffers, conv histories) + an n-gram/prompt-lookup
+   drafter with exact greedy verify. Report T(K+1)/T(1), accepted tokens/step per workload. CUDA-graph the verify step per K.
+B. Port the DSpark drafter (`reference/vllm_inkling2/`, `/tmp/inkling/mtp.safetensors`), eager first; report acceptance by position.
+C. Graph-capture draft + verify; adaptive K.
+Only if blocked on spec decoding: further kernel-count reduction (attn_res mix as one Triton kernel was in progress —
+see the newest `discarded/` branch; FP8 GEMV retune (8,128,8) is +3% stackable).
 
 ## How to run ONE experiment
 1. Read the files above. Don't repeat a dead end without a new reason.

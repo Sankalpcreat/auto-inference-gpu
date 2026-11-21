@@ -23,7 +23,7 @@ for i in $(seq 1 "$N"); do
     echo "!!! usage limit — stopping; restart with ./loop.sh $((N - i + 1))" | tee -a logs/loop.log; exit 2; fi
   if grep -qE "REMOTE START FAILED|TIMEOUT after" logs/last_out.log 2>/dev/null; then
     echo "!!! MoLab sandbox unreachable — stopping" | tee -a logs/loop.log; exit 3; fi
-  if ! git diff --quiet HEAD -- prepare_gpu.py decide.py run_remote.sh tools ref golden data knowledge program.md; then
-    echo "!!! protected file modified — stopping" | tee -a logs/loop.log; git checkout -- prepare_gpu.py decide.py run_remote.sh tools ref golden data knowledge program.md; exit 1; fi
+  if ! git diff --quiet HEAD -- prepare_gpu.py decide.py run_remote.sh tools ref golden data knowledge program.md reference; then
+    echo "!!! protected file modified — stopping" | tee -a logs/loop.log; git checkout -- prepare_gpu.py decide.py run_remote.sh tools ref golden data knowledge program.md reference; exit 1; fi
 done
 echo "=== done $(date +%H:%M:%S)" | tee -a logs/loop.log
