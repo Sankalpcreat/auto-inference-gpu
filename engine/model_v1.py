@@ -22,14 +22,27 @@ def _with_hist(cache, key, x):
     if hist is None:
         hist = x.new_zeros(3, x.shape[1])
     full = torch.cat([hist, x])
-    cache[key] = full[-3:].clone()
+    cache[key] = full[-3:] if x.shape[0] == 1 else full[-3:].clone()
     return full
 
 
-def conv_c(cache, key, x, w):
+def _f32(lw, key):
+    """Cached fp32 copy of a small weight."""
+    k = "_f32." + key
+    if k not in lw:
+        lw[k] = lw[key].float()
+    return lw[k]
+
+
+def conv_c(cache, key, x, w, lw=None, wkey=None):
     """Static causal conv with history: y = (sum_k w[c,k] x[t-3+k] + x[t]) / sqrt(5)."""
     T = x.shape[0]
     xp = _with_hist(cache, key, x).float()
+    if T == 1 and lw is not None:
+        k = "_convT." + wkey
+        if k not in lw:
+            lw[k] = w.float().T.contiguous()                                # (4, C), oldest tap first
+        return (((xp * lw[k]).sum(0, keepdim=True) + x.float()) * 5 ** -0.5).to(x.dtype)
     acc = sum(w[:, k].float() * xp[k:k + T] for k in range(4))
     return ((acc + x.float()) * 5 ** -0.5).to(x.dtype)
 
@@ -37,6 +50,9 @@ def conv_c(cache, key, x, w):
 def dyn_conv_c(cache, key, x, static_w, dyn):
     T, C = x.shape
     xp = _with_hist(cache, key, x).float()
+    if T == 1:
+        taps = static_w.float() + dyn[0].float().T.repeat_interleave(C // dyn.shape[1], 1)   # (4, C), newest first
+        return (((taps * xp.flip(0)).sum(0, keepdim=True) + x.float()) * 9 ** -0.5).to(x.dtype)
     acc = torch.zeros(T, C, device=x.device)
     for l in range(4):
         taps = static_w[l].float()[None] + dyn[:, :, l].float().repeat_interleave(C // dyn.shape[1], 1)
@@ -50,10 +66,11 @@ class InklingV1(InklingV0):
             return moe_t1(self.layers[i], x)
         return super().moe(i, x)
 
-    def new_cache(self):
-        return {"len": 0, "visits": [dict() for _ in VISITS]}
+    def new_cache(self, cap):
+        """cap = max total tokens; K/V live in preallocated fp32 (HKV, cap, HD) buffers per visit."""
+        return {"len": 0, "cap": cap, "visits": [dict() for _ in VISITS]}
 
-    def attention_c(self, i, c, xq, xk, xv, pos):
+    def attention_c(self, i, c, xq, xk, xv, pos, start, cap):
         lw, T = self.layers[i], xq.shape[0]
         is_global = i in GLOBAL
         q = (xq @ lw["attn.wq_du.weight"].T).view(T, H, HD)
@@ -65,33 +82,45 @@ class InklingV1(InklingV0):
             k = dyn_conv_c(c, "k", k_raw, lw["k_static"], (xk @ lw["k_proj"].T).view(T, HKV, 4))
             v = dyn_conv_c(c, "v", v_raw, lw["v_static"], (xv @ lw["v_proj"].T).view(T, HKV, 4))
         else:
-            k, v = conv_c(c, "k", k_raw, lw["k_conv"]), conv_c(c, "v", v_raw, lw["v_conv"])
+            k, v = conv_c(c, "k", k_raw, lw["k_conv"], lw, "k"), conv_c(c, "v", v_raw, lw["v_conv"], lw, "v")
         k = l2_clip(k.view(T, HKV, HD), QK_CLIP).to(torch.bfloat16)
         v = rms(v.view(T, HKV, HD).to(torch.bfloat16)).to(torch.bfloat16)
-        c["K"] = k if "K" not in c else torch.cat([c["K"], k])
-        c["V"] = v if "V" not in c else torch.cat([c["V"], v])
-        K, V = c["K"], c["V"]
-        S = K.shape[0]
+        if "K" not in c:
+            c["K"] = torch.empty(HKV, cap, HD, device=xq.device)
+            c["V"] = torch.empty(HKV, cap, HD, device=xq.device)
+        S = start + T
+        c["K"][:, start:S] = k.transpose(0, 1)
+        c["V"][:, start:S] = v.transpose(0, 1)
         qc = l2_clip(q * lw["attn.q_l2_clip.scale"].float(), QK_CLIP).to(torch.bfloat16)
         rc = l2_clip(r * lw["attn.rel_l2_clip.scale"].float(), REL_CLIP).to(torch.bfloat16)
-        if is_global:
+        if is_global and S > N_FLOOR:                      # tau == 1 exactly while every pos + 1 <= N_FLOOR
             tau = 1 + ALPHA * torch.log(torch.clamp((pos.float() + 1) / N_FLOOR, min=1.0))
             qc = (qc.float() * tau[:, None, None]).to(torch.bfloat16)
             rc = (rc.float() * tau[:, None, None]).to(torch.bfloat16)
-        rel = torch.einsum("thd,de->the", rc.float(), lw["attn.rel_logits_proj.proj"].float())
-        kpos = torch.arange(S, device=xq.device)
-        dist = pos[:, None] - kpos[None, :]
-        bias = rel.gather(2, dist.clamp(0, EXT - 1)[:, None, :].expand(-1, H, -1))
-        bias = bias.masked_fill(~((dist >= 0) & (dist < EXT))[:, None, :], 0.0)
-        kk = K.float().repeat_interleave(H // HKV, 1)
-        vv = V.float().repeat_interleave(H // HKV, 1)
-        scores = torch.einsum("qhd,khd->hqk", qc.float(), kk) * HD ** -0.5 + bias.transpose(0, 1)
-        mask = dist < 0
-        if not is_global:
-            mask = mask | (dist > WINDOW - 1)
-        scores = scores.masked_fill(mask[None], float("-inf"))
-        lse = scores.logsumexp(-1).T
-        out = torch.einsum("hqk,khd->qhd", scores.softmax(-1), vv)
+        rel = torch.einsum("thd,de->the", rc.float(), _f32(lw, "attn.rel_logits_proj.proj"))
+        if T == 1:
+            lo = 0 if is_global else max(0, S - WINDOW)
+            n = min(S - lo, EXT)
+            Kw, Vw = c["K"][:, lo:S], c["V"][:, lo:S]                                     # (HKV, Sw, HD) fp32
+            scores = (qc.float().view(HKV, H // HKV, HD) @ Kw.transpose(1, 2)) * HD ** -0.5  # (HKV, 3, Sw)
+            scores[..., scores.shape[-1] - n:] += rel[0, :, :n].flip(-1).view(HKV, H // HKV, n)
+            lse = scores.logsumexp(-1).view(1, H)
+            out = (scores.softmax(-1) @ Vw).view(1, H, HD)
+        else:
+            K, V = c["K"][:, :S].transpose(0, 1), c["V"][:, :S].transpose(0, 1)
+            kpos = torch.arange(S, device=xq.device)
+            dist = pos[:, None] - kpos[None, :]
+            bias = rel.gather(2, dist.clamp(0, EXT - 1)[:, None, :].expand(-1, H, -1))
+            bias = bias.masked_fill(~((dist >= 0) & (dist < EXT))[:, None, :], 0.0)
+            kk = K.repeat_interleave(H // HKV, 1)
+            vv = V.repeat_interleave(H // HKV, 1)
+            scores = torch.einsum("qhd,khd->hqk", qc.float(), kk) * HD ** -0.5 + bias.transpose(0, 1)
+            mask = dist < 0
+            if not is_global:
+                mask = mask | (dist > WINDOW - 1)
+            scores = scores.masked_fill(mask[None], float("-inf"))
+            lse = scores.logsumexp(-1).T
+            out = torch.einsum("hqk,khd->qhd", scores.softmax(-1), vv)
         out = out * torch.sigmoid(gate.float().view(T, H, HD)) * torch.sigmoid(lse - sinks)[..., None]
         return out.to(torch.bfloat16).reshape(T, H * HD) @ lw["attn.wo_ud.weight"].T
 
@@ -99,7 +128,7 @@ class InklingV1(InklingV0):
     def forward(self, ids, cache=None):
         """Append ids (T,) to `cache` (new if None); return (fp32 logits (T, VOCAB), cache)."""
         if cache is None:
-            cache = self.new_cache()
+            cache = self.new_cache(ids.shape[0])
         T = ids.shape[0]
         start = cache["len"]
         pos = torch.arange(start, start + T, device=self.dev)
@@ -128,15 +157,15 @@ class InklingV1(InklingV0):
             xq = xin[0]
             xk = xin[1] if xin.shape[0] == 3 else xq
             xv = xin[2] if xin.shape[0] == 3 else xq
-            a = self.attention_c(i, c, xq, xk, xv, pos)
-            attn_out = conv_c(c, "attn", a, lw["attn_sconv.weight"].squeeze(1))
+            a = self.attention_c(i, c, xq, xk, xv, pos, start, cache["cap"])
+            attn_out = conv_c(c, "attn", a, lw["attn_sconv.weight"].squeeze(1), lw, "attn")
             first = i % BLOCK == 0
             src = stack[:nb + 1] + [attn_out] if first else stack[:nb] + [partial.float() + attn_out.float()]
             if p > 0:
                 mlp_in = self.blend(i, ("mlp",), attn_res(src, self.mlp_q[i]), msgs[3:], lw["mlp_norm.weight"][None])[0]
             else:
                 mlp_in = attn_res(src, self.mlp_q[i], lw["mlp_norm.weight"][None]).to(torch.bfloat16)[0]
-            mconv = conv_c(c, "mlp", self.moe(i, mlp_in), lw["mlp_sconv.weight"].squeeze(1))
+            mconv = conv_c(c, "mlp", self.moe(i, mlp_in), lw["mlp_sconv.weight"].squeeze(1), lw, "mlp")
             if first:
                 nb += 1
                 new = (attn_out.float() + mconv.float()).to(torch.bfloat16)
@@ -150,7 +179,7 @@ class InklingV1(InklingV0):
 
     @torch.inference_mode()
     def generate(self, ids, n):
-        logits, cache = self.forward(ids)
+        logits, cache = self.forward(ids, self.new_cache(ids.shape[0] + n))
         out = [logits[-1].argmax()]
         for _ in range(n - 1):
             logits, cache = self.forward(out[-1][None], cache)
