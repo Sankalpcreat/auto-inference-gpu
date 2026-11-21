@@ -16,6 +16,7 @@ import torch.nn.functional as F
 from .model_v0 import (ALPHA, BLOCK, CORE, DREL, EXT, GLOBAL, H, HD, HKV, L, LOGIT_CAP, N_FLOOR, PASSES, QK_CLIP,
                        REL_CLIP, STREAMS, VOCAB, WINDOW, InklingV0, attn_res, l2_clip, rms)
 from .moe_triton import grouped_gemv, moe_t1
+from .moe_packed import load_packed, packed_gemv
 from . import fused_t1 as FT
 
 VISITS = [(i, 0) for i in range(CORE.start)] + [(i, p) for p in range(PASSES) for i in CORE] + \
@@ -84,6 +85,7 @@ class InklingV1(InklingV0):
         self.tok = torch.zeros(1, dtype=torch.long, device=self.dev)      # static decode input / output
         self.pos = torch.zeros(1, dtype=torch.long, device=self.dev)
         self.graphs = {}
+        self.packed = load_packed(n_layers=L, device=self.dev)          # NVFP4/MXFP8 experts for T=1
         self.t1 = [FT.prep(lw, i, i in GLOBAL, i in CORE, STREAMS) for i, lw in enumerate(self.layers)]
         self.ensure_cap(4096)
 
@@ -269,8 +271,9 @@ class InklingV1(InklingV0):
         else:
             mlp_in = FT.mix_norm(src, self.mlp_q[i], lw["mlp_norm.weight"][None])[0]
         ids, w = FT.router(mlp_in, t["gw"], t["gb"])
-        gu = grouped_gemv(lw["w13"], mlp_in[0].contiguous(), ids, True)
-        y = grouped_gemv(lw["w2"], FT.act(gu, w), ids, False)
+        pk = self.packed[i]
+        gu = packed_gemv(pk["w13"], mlp_in[0].contiguous(), ids, True)
+        y = packed_gemv(pk["w2"], FT.act(gu, w), ids, False)
         mconv = FT.moe_out_conv(y, c["mlp"], t["mT"])
         if first:
             nb += 1
