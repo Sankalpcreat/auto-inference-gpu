@@ -1,5 +1,22 @@
 # Measured facts (update as agents learn; dead ends at the bottom)
 
+## THE TARGET TO BEAT (same GPU family, measured by hyudryu/Inkling-2-Mini-2xRTXPro6000, patched vLLM, TP1, 2026-11-21)
+| vLLM TP1 | 1 user |
+|---|---|
+| decode step (verifies 1 + K=4 DSpark drafts) | **10.0 ms** (baseline vLLM 11.5 ms at K=7) |
+| tok/s prose / coding / counting | **196 / 295 / 407** |
+| their bytes/step | 54 MB dense per layer pass x 48 (BF16, = 2.6 GB) + ~4.5 MB per distinct expert; ~9 ms of 11.5 ms is bandwidth |
+| their kernels | big kernels at 1.3–1.6 TB/s cold; tile tuning and L2 prefetch gave nothing; ~850 small kernels per step |
+| DSpark acceptance by draft position (K=7) | 67 / 45 / 31 / 23 / 18 / 14 / 11 % |
+vLLM keeps outputs EXACT (BF16 dense, native NVFP4/MXFP8 experts). Our harness allows lossy changes if the gates pass,
+so our edges are: FP8/NVFP4 dense projections (2.6 → 1.3/0.7 GB), FP8 unembed, adaptive draft length, a batch-1-only engine.
+
+## Progress (2026-11-21, 6 experiments): 6.1 → 64.52 tok/s (15.5 ms/token), eval 12/12, nll_ratio 1.0
+- exp: sync-free Triton MoE GEMV 9.24; static KV + windowed attention 11.83; whole-step CUDA graph 31.74; torch.compile T=1 regions 64.52
+- Profile at 31.7 tok/s (agent 5): 12,056 kernels/step, gaps only 1.6 ms; ~65% of time in 11.5k tiny kernels (<5 µs);
+  bandwidth part ~10 ms = experts 5.2 ms (BF16-dequantized, ~6 GB/token, near 1.3 TB/s) + attention projections 4.3 ms + unembed 0.7 ms
+- After torch.compile the tiny-kernel share dropped a lot; re-profile before choosing.
+
 ## Baseline (2026-11-21): engine v1, 6.1 tok/s, noise ±0.6%, eval 12/12, peak 56 GB
 - Decode step ≈ 164 ms at batch 1. Ceiling with the BF16-dequantized experts v1 uses: experts 8 × 10.6 MB × 48 visits
   ≈ 6.1 GB + attention 2.6 GB + unembed 0.93 GB ≈ **9.6 GB/token → ~135 tok/s at 1.3 TB/s**. Keeping experts packed

@@ -10,18 +10,17 @@ the GPU by the frozen harness `prepare_gpu.py`; KEEP/DISCARD decided by `decide.
 `engine/model_v1.py`. The math reference is `ref/` (frozen copy of the correct engine) — your engine must stay
 numerically faithful to it (the quality gates check).
 
-## Ranked hypotheses (start at the top unless notes.md shows it done)
-1. **Profile one decode step** (torch.profiler, CUDA time by op + count kernels + count host syncs) with a script in
-   `scratch/` run via `tools/gpu_script.sh scratch/<file>.py`. Record the breakdown in notes.md.
-2. **Remove host syncs + Python loops in MoE**: at T=1 gather the 8 experts' weights (`w13[ids]`, `w2[ids]`) and use
-   `bmm`; no `.unique()`, `.tolist()`, `nonzero()`. Same math (bitwise not required; gates decide).
-3. **Static buffers**: preallocate K/V and conv history per visit to a max length; write in place (no `torch.cat`).
-   Decode attention in bf16 (SDPA / flash with GQA, sink + rel-bias as an additive mask over the last ≤1024 keys for local layers).
-4. **CUDA graph the whole decode step** (needs 2+3). Expect the largest single jump (launch 22 µs → 1.1 µs).
-5. Batch the 4 controller streams (bmm), fuse AttnRes mixes, `torch.compile` small elementwise regions.
-6. **Keep experts packed** (NVFP4/MXFP8) with a dequant-in-kernel GEMV (Triton) → 3.4× fewer expert bytes.
-7. Lossy (allowed only if gates pass): FP8 attention weights / unembed, FP8 KV.
-8. DSpark speculative decoding (`mtp.safetensors`), exact-greedy verify.
+## Ranked hypotheses (now at 64.5 tok/s; target: beat vLLM's 10.0 ms/step ≈ 200–400 tok/s with DSpark)
+1. **Re-profile the current graph replay** if notes.md has no profile at 64.5 tok/s (kernel count, time by kernel class, bytes vs time).
+2. **Keep experts packed (NVFP4 layers 0–19, MXFP8 20–23)**: Triton GEMV that dequantizes in registers (E2M1 LUT x FP8-E4M3
+   block scale per 16 x amax/2688; MXFP8: E4M3 x 2^(s-127) per 32). Expert bytes 6 GB → 1.7 GB/token (expect ~−3.5 ms).
+   Must match the BF16-dequant result (same dequant math, fp32 accumulate).
+3. **FP8 dense projections** (wq, gate, wk, wv, wo, wr, sink; per-output-channel scale, weight-only, fp32 accumulate) and
+   **FP8 unembed**: 2.6 → 1.3 GB and 0.93 → 0.46 GB. Lossy: gates decide (NLL +2%, eval ≥ 11/12).
+4. **DSpark speculative decoding** (`/tmp/inkling/mtp.safetensors`, 3 layers, block 8, reads hidden states at visits 5, 23, 41 + final);
+   exact greedy verify of 1+K tokens per step in one graph; needs a T>1 decode path. Then **adaptive K** (draft long only when confident).
+5. Remaining small-kernel fusion (Triton) where the profile says.
+6. Loop-aware ideas: expert overlap across passes, per-pass caches.
 
 ## How to run ONE experiment
 1. Read the files above. Don't repeat a dead end without a new reason.
