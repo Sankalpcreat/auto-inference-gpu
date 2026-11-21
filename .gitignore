@@ -4,6 +4,6 @@ logs/
 report/
 notes.md
 scratch/
-golden/
 __pycache__/
 .venv/
+.molab
