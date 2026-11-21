@@ -28,7 +28,7 @@ numerically faithful to it (the quality gates check).
 3. Write the hypothesis + expected gain in `notes.md` BEFORE running.
 4. Edit only files under `engine/` (keep the `engine/infer.py` contract), then `git add engine && git commit -q -m "<idea>"`.
 5. `./run_remote.sh "<one-line description>" > logs/last_out.log 2>&1`, then read `logs/last_out.log` (~5 min at baseline speed).
-6. `DECISION: KEEP` → keep the commit. `DISCARD` / `FAIL-GATE` → `git reset --hard HEAD~1`.
+6. `DECISION: KEEP` → keep the commit. `DISCARD` / `FAIL-GATE` → `git reset --hard HEAD~1` (the loop also reverts engine/ to the last KEEP after you exit and saves unkept work on a `discarded/` branch; always start from HEAD).
    `CRASH` → fix once if trivial, else reset. `REMOTE START FAILED` / `TIMEOUT` → the sandbox is gone: write that in notes.md and STOP.
 7. Append to `notes.md`: what, numbers, decision, what it teaches, next idea. Finish with a 3–5 line summary.
 
