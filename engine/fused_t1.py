@@ -9,6 +9,7 @@ import torch.nn.functional as F
 
 from .model_v0 import (ALPHA, DREL, EPS, GATE_CAP, H, HD, HKV, N_FLOOR, QK_CLIP, REL_CLIP, ROUTE_SCALE, TOPK,
                        UP_CAP, attn_res, l2_clip, rms)
+from .fp8_dense import fp8_gemv
 
 for _k, _v in (("cache_size_limit", 512), ("accumulated_cache_size_limit", 4096)):
     if hasattr(torch._dynamo.config, _k):
@@ -39,11 +40,17 @@ def _dyn_conv(x, hist, static_w, dyn):
     return (((taps * xp.flip(0)).sum(0, keepdim=True) + x.float()) * 9 ** -0.5).to(x.dtype)
 
 
+def _lin(x, w, name):
+    """FP8 weight-only GEMV: x (1, K) bf16 -> (1, N) bf16."""
+    return fp8_gemv(x, w[name + "8"], w[name + "s"]).view(1, -1)
+
+
 def _qkv(xq, xk, xv, w, k, v):
-    q = (xq @ w["wq"].T).view(1, H, HD)
-    r = (xq @ w["wr"].T).view(1, H, DREL)
-    gate = xq @ w["wg"].T
-    sinks = (xq @ w["ws"].T).float()
+    y = _lin(xq, w, "qrgs")                                     # wq | wr | gate | sink, one FP8 GEMV
+    q = y[:, :H * HD].view(1, H, HD)
+    r = y[:, H * HD:H * HD + H * DREL].view(1, H, DREL)
+    gate = y[:, H * HD + H * DREL:2 * H * HD + H * DREL]
+    sinks = y[:, 2 * H * HD + H * DREL:].float()
     k = l2_clip(k.view(1, HKV, HD), QK_CLIP).to(BF)
     v = rms(v.view(1, HKV, HD).to(BF)).to(BF)
     qc = l2_clip(q * w["qscale"].float(), QK_CLIP).to(BF)
@@ -57,20 +64,20 @@ def _attend(qc, rel_bias, K, V, gate, sinks, wo):
     lse = scores.logsumexp(-1).view(1, H)
     out = (scores.softmax(-1) @ V).view(1, H, HD)
     out = out * torch.sigmoid(gate.float().view(1, H, HD)) * torch.sigmoid(lse - sinks)[..., None]
-    return out.to(BF).reshape(1, H * HD) @ wo.T
+    return _lin(out.to(BF).reshape(1, H * HD), wo, "wo")
 
 
 @compile_
 def attn_local(xq, xk, xv, w, hk, hv, ha, K, V, slot, ldist, ladd):
     """Local layer decode attention + attn-output conv. Returns attn_out (1, D) bf16."""
-    k = _conv(xk @ w["wk"].T, hk, w["kT"])
-    v = _conv(xv @ w["wv"].T, hv, w["vT"])
+    k = _conv(_lin(xk, w, "wk"), hk, w["kT"])
+    v = _conv(_lin(xv, w, "wv"), hv, w["vT"])
     qc, rc, gate, sinks, k, v = _qkv(xq, xk, xv, w, k, v)
     rel = torch.einsum("thd,de->the", rc.float(), w["relp"])
     K.index_copy_(1, slot, k.transpose(0, 1).float())
     V.index_copy_(1, slot, v.transpose(0, 1).float())
     bias = rel[0][:, ldist] + ladd
-    a = _attend(qc, bias, K, V, gate, sinks, w["wo"])
+    a = _attend(qc, bias, K, V, gate, sinks, w)
     return _conv(a, ha, w["aT"])
 
 
@@ -78,8 +85,8 @@ def attn_local(xq, xk, xv, w, hk, hv, ha, K, V, slot, ldist, ladd):
 def attn_global(xq, xk, xv, w, hk, hv, ha, K, V, pos, gidx, gmul, gadd):
     """Global layer decode attention over a static bucket of B = gidx.shape[0] keys + attn-output conv."""
     B = gidx.shape[0]
-    k = _dyn_conv(xk @ w["wk"].T, hk, w["k_static"], (xk @ w["k_proj"].T).view(1, HKV, 4))
-    v = _dyn_conv(xv @ w["wv"].T, hv, w["v_static"], (xv @ w["v_proj"].T).view(1, HKV, 4))
+    k = _dyn_conv(_lin(xk, w, "wk"), hk, w["k_static"], (xk @ w["k_proj"].T).view(1, HKV, 4))
+    v = _dyn_conv(_lin(xv, w, "wv"), hv, w["v_static"], (xv @ w["v_proj"].T).view(1, HKV, 4))
     qc, rc, gate, sinks, k, v = _qkv(xq, xk, xv, w, k, v)
     tau = 1 + ALPHA * torch.log(torch.clamp((pos.float() + 1) / N_FLOOR, min=1.0))
     qc = (qc.float() * tau[:, None, None]).to(BF)
@@ -88,7 +95,7 @@ def attn_global(xq, xk, xv, w, hk, hv, ha, K, V, pos, gidx, gmul, gadd):
     K.index_copy_(1, pos, k.transpose(0, 1).float())
     V.index_copy_(1, pos, v.transpose(0, 1).float())
     bias = rel[0][:, gidx] * gmul + gadd
-    a = _attend(qc, bias, K[:, :B], V[:, :B], gate, sinks, w["wo"])
+    a = _attend(qc, bias, K[:, :B], V[:, :B], gate, sinks, w)
     return _conv(a, ha, w["aT"])
 
 
@@ -146,10 +153,11 @@ def residual2(attn_out, mconv):
 
 
 def prep(lw, i, is_global, is_core, streams):
-    """Precompute per-layer fp32 / stacked weights used by the compiled T=1 functions (once, at load)."""
-    w = {"wq": lw["attn.wq_du.weight"], "wr": lw["attn.wr_du.weight"], "wg": lw["attn.gate_attn.weight"],
-         "ws": lw["attn.attn_sink_proj.weight"], "wk": lw["attn.wk_dv.weight"], "wv": lw["attn.wv_dv.weight"],
-         "wo": lw["attn.wo_ud.weight"], "qscale": lw["attn.q_l2_clip.scale"], "rscale": lw["attn.rel_l2_clip.scale"],
+    """Precompute per-layer fp32 / stacked weights used by the compiled T=1 functions (once, at load).
+    FP8 dense weights lw["fp8"][name] = (q, s) come from InklingV1.quantize_fp8."""
+    f8 = lw["fp8"]
+    w = {"qrgs8": f8["qrgs"][0], "qrgss": f8["qrgs"][1], "wk8": f8["wk"][0], "wks": f8["wk"][1],
+         "wv8": f8["wv"][0], "wvs": f8["wv"][1], "wo8": f8["wo"][0], "wos": f8["wo"][1], "qscale": lw["attn.q_l2_clip.scale"], "rscale": lw["attn.rel_l2_clip.scale"],
          "relp": lw["attn.rel_logits_proj.proj"].float(),
          "aT": lw["attn_sconv.weight"].squeeze(1).float().T.contiguous()}
     if is_global:

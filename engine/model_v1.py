@@ -18,6 +18,7 @@ from .model_v0 import (ALPHA, BLOCK, CORE, DREL, EXT, GLOBAL, H, HD, HKV, L, LOG
 from .moe_triton import grouped_gemv, moe_t1
 from .moe_packed import load_packed, packed_gemv
 from . import fused_t1 as FT
+from .fp8_dense import fp8_gemv, quantize
 
 VISITS = [(i, 0) for i in range(CORE.start)] + [(i, p) for p in range(PASSES) for i in CORE] + \
          [(i, 0) for i in range(CORE.stop, L)]
@@ -75,7 +76,7 @@ def dyn_conv_c(cache, key, x, static_w, dyn, decode=False):
 
 
 class InklingV1(InklingV0):
-    def __init__(self, *a, **k):
+    def __init__(self, *a, fp8=True, **k):
         super().__init__(*a, **k)
         self.cache = {"cap": 0, "visits": [dict() for _ in VISITS]}
         for (i, _), c in zip(VISITS, self.cache["visits"]):
@@ -86,8 +87,36 @@ class InklingV1(InklingV0):
         self.pos = torch.zeros(1, dtype=torch.long, device=self.dev)
         self.graphs = {}
         self.packed = load_packed(n_layers=L, device=self.dev)          # NVFP4/MXFP8 experts for T=1
-        self.t1 = [FT.prep(lw, i, i in GLOBAL, i in CORE, STREAMS) for i, lw in enumerate(self.layers)]
+        self.fp8 = False
+        if fp8:
+            self.quantize_fp8()
         self.ensure_cap(4096)
+
+    def quantize_fp8(self):
+        """FP8-E4M3 weight-only (per-output-row scale) dense projections + unembed. The bf16 tensors are replaced by
+        their dequantized values so prefill / NLL run the same lossy model as the FP8 decode GEMVs."""
+        names = {"wq": "attn.wq_du.weight", "wr": "attn.wr_du.weight", "wg": "attn.gate_attn.weight",
+                 "ws": "attn.attn_sink_proj.weight", "wk": "attn.wk_dv.weight", "wv": "attn.wv_dv.weight",
+                 "wo": "attn.wo_ud.weight"}
+        for lw in self.layers:
+            assert [lw[names[n]].shape[0] for n in ("wq", "wr", "wg", "ws")] == [H * HD, H * DREL, H * HD, H]
+            f8 = {}
+            parts = []
+            for n, key in names.items():
+                q, s, dq = quantize(lw[key])
+                lw[key] = dq
+                if n in ("wq", "wr", "wg", "ws"):
+                    parts.append((q, s))
+                else:
+                    f8[n] = (q, s)
+            f8["qrgs"] = (torch.cat([p[0] for p in parts]).contiguous(), torch.cat([p[1] for p in parts]).contiguous())
+            lw["fp8"] = f8
+        q, s, dq = quantize(self.unembed)
+        self.unembed, self.unembed8 = dq, (q, s)
+        self.fp8 = True
+        torch.cuda.empty_cache()
+        self.t1 = [FT.prep(lw, i, i in GLOBAL, i in CORE, STREAMS) for i, lw in enumerate(self.layers)]
+        self.graphs = {}
 
     def ensure_cap(self, need):
         if need <= self.cache["cap"]:
@@ -238,7 +267,10 @@ class InklingV1(InklingV0):
                 new = (partial.float() + attn_out.float() + mconv.float()).to(torch.bfloat16)
             stack = stack[:nb] + [new]
         h = attn_res(stack[:nb] + [stack[nb]], self.out_q, self.norm[None])[0].to(torch.bfloat16)
-        logits = (h @ self.unembed.T).float()[:, :VOCAB]
+        if decode and self.fp8:
+            logits = fp8_gemv(h, *self.unembed8).float()[None, :VOCAB]
+        else:
+            logits = (h @ self.unembed.T).float()[:, :VOCAB]
         return LOGIT_CAP * torch.tanh(logits / LOGIT_CAP), cache
 
     def _visit_t1(self, v, i, p, c, stack, nb, partial, bank, pos, dctx):
