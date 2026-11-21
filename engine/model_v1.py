@@ -10,6 +10,7 @@ import torch.nn.functional as F
 
 from .model_v0 import (ALPHA, BLOCK, CORE, DREL, EXT, GLOBAL, H, HD, HKV, L, LOGIT_CAP, N_FLOOR, PASSES, QK_CLIP,
                        REL_CLIP, STREAMS, VOCAB, WINDOW, InklingV0, attn_res, l2_clip, rms)
+from .moe_triton import moe_t1
 
 VISITS = [(i, 0) for i in range(CORE.start)] + [(i, p) for p in range(PASSES) for i in CORE] + \
          [(i, 0) for i in range(CORE.stop, L)]
@@ -44,6 +45,11 @@ def dyn_conv_c(cache, key, x, static_w, dyn):
 
 
 class InklingV1(InklingV0):
+    def moe(self, i, x):
+        if x.shape[0] == 1:
+            return moe_t1(self.layers[i], x)
+        return super().moe(i, x)
+
     def new_cache(self):
         return {"len": 0, "visits": [dict() for _ in VISITS]}
 
