@@ -67,3 +67,39 @@ def quantize(W):
         q = (w / s[:, None]).to(FP8)
         qs.append(q); ss.append(s); ds.append((q.float() * s[:, None]).to(torch.bfloat16))
     return torch.cat(qs).contiguous(), torch.cat(ss).contiguous(), torch.cat(ds).contiguous()
+
+
+@triton.jit
+def _fp8_rows(X, W, S, OUT, N, K, M: tl.constexpr, MP: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr):
+    """M-row variant: the weight tile is loaded once and used for all M rows (verify step)."""
+    pn = tl.program_id(0)
+    offs_n = pn * BLOCK_N + tl.arange(0, BLOCK_N)
+    mn = offs_n < N
+    rows = tl.arange(0, MP)
+    mr = rows < M
+    wbase = W + offs_n[:, None].to(tl.int64) * K
+    acc = tl.zeros([MP, BLOCK_N, BLOCK_K], dtype=tl.float32)
+    for k0 in range(0, K, BLOCK_K):
+        offs_k = k0 + tl.arange(0, BLOCK_K)
+        x = tl.load(X + rows[:, None] * K + offs_k[None, :], mask=mr[:, None], other=0.0).to(tl.float32)
+        w = tl.load(wbase + offs_k[None, :], mask=mn[:, None], other=0.0).to(tl.float32)
+        acc += w[None, :, :] * x[:, None, :]
+    r = tl.sum(acc, 2) * tl.load(S + offs_n, mask=mn, other=0.0)[None, :]
+    tl.store(OUT + rows[:, None] * N + offs_n[None, :], r.to(tl.bfloat16), mask=mr[:, None] & mn[None, :])
+
+
+@triton_op("inkling::fp8_rows", mutates_args={})
+def fp8_rows(x: torch.Tensor, q: torch.Tensor, s: torch.Tensor) -> torch.Tensor:
+    """x (M, K) bf16 -> (M, N) bf16, M <= 8."""
+    N, K = q.shape
+    M = x.shape[0]
+    x = x.contiguous()
+    out = torch.empty(M, N, dtype=torch.bfloat16, device=q.device)
+    MP = triton.next_power_of_2(M)
+    BN = 32 if N > 50000 else 16
+    BK = max(16, 512 // MP)
+    while K % BK:
+        BK //= 2
+    wrap_triton(_fp8_rows)[(triton.cdiv(N, BN),)](x, q, s, out, N, K, M=M, MP=MP, BLOCK_N=BN, BLOCK_K=BK,
+                                                  num_warps=8 if N > 50000 else 4)
+    return out
