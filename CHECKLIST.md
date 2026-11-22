@@ -58,7 +58,7 @@ The list is a map, not a recipe: each item is a direction to measure, never a gu
 | 6 | Execution | yes | whole-step CUDA graph; torch.compile regions | 11.8→31.7→64.5 (KEEP) | done |
 | 7 | Kernels | yes | Triton MoE GEMV, packed GEMV, FP8 GEMV retune, split-K, fused attention, Triton blend | blend 92.3→96.0 (KEEP); retune +3% / split-K / fused attention (DISCARD) | in progress |
 | 8 | KV cache | yes | ring buffer (local), buckets (global), fp32→bf16 K/V | part of KEEPs; FP8 KV untried | partial |
-| 9 | Speculative decoding | yes | n-gram simulation (1.33 tok/step); verify(5) projected 1.37×; verify + rollback built, exact 64/64 | DSpark port next | in progress |
+| 9 | Speculative decoding | yes | n-gram simulation (1.33 tok/step); verify(5) projected 1.37×; verify + rollback built, exact 64/64; tl.dot dedup T-row expert kernel wrong + 3.7× slower (#19) | GEMV-with-row-loop verify expert kernel, then DSpark | in progress |
 | 10 | Prefill | yes (~20× behind vLLM) | — | not in the score yet | todo |
 | 11 | Sparsity / adaptive passes | yes (varloop checkpoint) | — | — | todo |
 | 17 | Test-time compute policy | yes (reasoning_effort) | — | not in the score (raw completions) | todo |
