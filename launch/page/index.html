@@ -1,0 +1,175 @@
+<title>Inkling Autoresearch</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@500;700&family=Inter:wght@400;500&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one narrow column of charts on black, like a lab's results post; data in mono, titles tight and bold. Deliberately single dark theme. */
+:root{
+  --bg:#000; --panel:#0b0b0d; --ink:#f2f2f2; --ink2:#b9b9bf; --muted:#6e6e74; --line:#2a2a2e;
+  --ours:#5b8def; --vllm:#b5683a; --violet:#9b7be8; --green:#4fa36b;
+  --display:"Inter Tight",system-ui,sans-serif; --body:"Inter",system-ui,sans-serif; --mono:"JetBrains Mono",ui-monospace,Menlo,monospace;
+  color-scheme:dark;
+}
+body{background:var(--bg);color:var(--ink);font:15px/1.6 var(--body)}
+.wrap{max-width:980px;margin:0 auto;padding-block:40px 64px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));display:grid;gap:56px}
+h1,h2{font-family:var(--display);font-weight:700;letter-spacing:-.01em;text-wrap:balance;margin:0}
+h1{font-size:clamp(30px,5vw,48px);line-height:1.08}
+h2{font-size:22px}
+.lede{color:var(--ink2);max-width:64ch;margin:14px 0 0;font-size:17px}
+.sub{color:var(--ink2);margin:6px 0 0;font-size:14px}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin-top:28px}
+.tile{border:1px solid var(--line);border-radius:10px;padding:14px 16px;background:var(--panel)}
+.tile b{display:block;font:500 26px/1.2 var(--mono);font-variant-numeric:tabular-nums}
+.tile span{color:var(--ink2);font-size:13px}
+.tile b.ours{color:var(--ours)}
+section{display:grid;gap:12px;min-width:0}
+.legend{display:flex;flex-wrap:wrap;gap:8px 22px;color:var(--ink);font-size:14px}
+.legend i{display:inline-block;width:12px;height:12px;border-radius:50%;margin-right:8px;vertical-align:-1px}
+.chart{position:relative;min-width:0}
+.chart svg{width:100%;height:auto;display:block;overflow:visible}
+.note{color:var(--ink2);font-size:13.5px;max-width:70ch;margin:0}
+.tip{position:absolute;pointer-events:none;background:#141418;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:12.5px;line-height:1.45;max-width:280px;box-shadow:0 6px 24px rgba(0,0,0,.5)}
+.tip b{font-family:var(--mono);font-weight:500}
+table{border-collapse:collapse;width:100%;font-size:14px}
+th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+th{color:var(--ink2);font-weight:500;font-size:13px}
+td.num{font-family:var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap}
+.tbl{overflow-x:auto}
+.pill{font:500 11.5px var(--mono);padding:2px 7px;border-radius:99px;border:1px solid var(--line);white-space:nowrap}
+.pill.keep{color:var(--ours);border-color:#2b4170}.pill.disc{color:var(--muted)}
+.loop{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}
+.step{border:1px solid var(--line);border-radius:10px;padding:12px 14px;background:var(--panel)}
+.step b{font-family:var(--display);display:block;margin-bottom:4px}
+.step p{margin:0;color:var(--ink2);font-size:13.5px}
+a{color:var(--ours)}
+footer{color:var(--muted);font-size:13px;border-top:1px solid var(--line);padding-top:18px}
+@media (prefers-reduced-motion:no-preference){.draw{stroke-dasharray:4000;stroke-dashoffset:4000;animation:d 1.6s ease-out .2s forwards}@keyframes d{to{stroke-dashoffset:0}}}
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>AI agents made a day-old 26B model's engine 16× faster</h1>
+    <p class="lede">Inkling 2 Mini, a looped mixture-of-experts model released by Thinking Machines on 20 November 2026, running on our own engine on one NVIDIA RTX PRO 6000. Claude Code agents ran one experiment at a time; a frozen referee kept only changes that were faster and kept quality.</p>
+    <div class="tiles">
+      <div class="tile"><span>start, plain PyTorch</span><b>6.1 tok/s</b></div>
+      <div class="tile"><span>after autoresearch</span><b class="ours">98.1 tok/s</b></div>
+      <div class="tile"><span>speedup</span><b class="ours">16.1×</b></div>
+      <div class="tile"><span>kernels per token</span><b>22,760 → 2,783</b></div>
+      <div class="tile"><span>quality, every kept run</span><b>12/12</b></div>
+    </div>
+  </header>
+
+  <section>
+    <h2>Every benchmark run</h2>
+    <p class="sub">Decode tokens/s, one user, log scale. Hover a point for the change and the result.</p>
+    <div class="legend"><span><i style="background:var(--ours)"></i>Kept (faster than the best by more than max(1.5%, 2× noise), all quality gates pass)</span><span><i style="background:transparent;border:2px solid var(--muted);width:8px;height:8px"></i>Discarded</span></div>
+    <div class="chart" id="climb"></div>
+    <p class="note">Quality gates on every kept run: 12/12 eval answers (including two long-context retrieval questions), perplexity within 0.4% of the frozen reference engine, deterministic output, exact token counts.</p>
+  </section>
+
+  <section>
+    <h2>Where we stand against vLLM</h2>
+    <p class="sub">Single-user decode tokens/s. Bars span the range across workloads; dots mark the midpoint.</p>
+    <div class="chart" id="vs"></div>
+    <p class="note">vLLM figures come from the community recipe hyudryu/Inkling-2-Mini-2xRTXPro6000 (Workstation Edition, prose/coding/counting prompts, DSpark K=4), not a same-machine run. One forward pass costs about the same in both engines (~10 ms); vLLM's lead is its cheaper speculative step.</p>
+  </section>
+
+  <section>
+    <h2>How often the DSpark drafter guesses right</h2>
+    <p class="sub">Cumulative acceptance by draft position, measured in our engine.</p>
+    <div class="legend" id="dlegend"></div>
+    <div class="chart" id="dspark"></div>
+    <p class="note">2.25 / 2.60 / 2.85 tokens per step at draft length 2 / 3 / 4. Speculative decoding is kept at 98.1 tok/s; each verify step still costs about 2.2× a normal step, which is the gap to close next.</p>
+  </section>
+
+  <section>
+    <h2>Where one token's 10.9 ms went</h2>
+    <p class="sub">GPU time per decode step at 92 tok/s, from an agent profiling study.</p>
+    <div class="chart" id="brk"></div>
+  </section>
+
+  <section>
+    <h2>How the loop works</h2>
+    <div class="loop">
+      <div class="step"><b>Brief</b><p>GPU facts, the model's op graph, measured numbers, dead ends, and a 28-dimension checklist.</p></div>
+      <div class="step"><b>Agent</b><p>A fresh Claude Code session profiles on the GPU, edits the engine and commits one idea.</p></div>
+      <div class="step"><b>Referee</b><p>Frozen harness on the GPU: external timing, fixed work, quality checked against saved reference outputs.</p></div>
+      <div class="step"><b>Decision</b><p>Keep only if faster than the best by more than the noise; otherwise revert and save the code on a branch.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>All runs</h2>
+    <div class="tbl"><table id="runs"><thead><tr><th>#</th><th>Result</th><th>tok/s</th><th>Change</th></tr></thead><tbody></tbody></table></div>
+  </section>
+
+  <footer>Model: Inkling 2 Mini by Thinking Machines Lab (Apache 2.0). Math reference: vLLM PR #69028, read only. Loop idea: karpathy/autoresearch. Built by Sankalp Singh with Claude Code agents. Code and every run: <a href="https://github.com/Sankalpcreat/auto-inference-gpu">github.com/Sankalpcreat/auto-inference-gpu</a></footer>
+</div>
+
+<script>
+const C={ours:"#5b8def",vllm:"#b5683a",violet:"#9b7be8",green:"#4fa36b",ink:"#f2f2f2",ink2:"#b9b9bf",muted:"#6e6e74",line:"#2a2a2e"};
+const RUNS=[["BASELINE",6.1,"Baseline: engine v1, eager PyTorch, BF16-dequantized experts"],["KEEP",9.24,"Sync-free MoE: Triton grouped GEMV on the top-8 experts, no host syncs"],["KEEP",11.83,"Static K/V buffers + windowed attention for one token"],["KEEP",31.74,"Whole decode step captured in one CUDA graph"],["KEEP",64.52,"torch.compile of the per-token regions inside the graph"],["KEEP",78.96,"Packed NVFP4/MXFP8 experts, dequantized inside a Triton kernel"],["KEEP",92.33,"FP8 dense projections + FP8 output layer (quality-gated)"],["DISCARD",95.07,"FP8 GEMV tile retune (below the noise bar)"],["DISCARD",92.23,"Fused split-key decode attention (correct, not faster)"],["DISCARD",92.62,"BF16 loop-message controllers (latency-bound, +0.3%)"],["KEEP",95.98,"Loop-message blend in 3 Triton kernels"],["DISCARD",94.37,"FP8 GEMV retune on top of the Triton blend"],["KEEP",98.09,"DSpark speculative decoding, fully CUDA-graphed (K=2)"]];
+const NS="http://www.w3.org/2000/svg";
+function el(t,a,p){const e=document.createElementNS(NS,t);for(const k in a)e.setAttribute(k,a[k]);p&&p.appendChild(e);return e}
+function svg(host,W,H){const s=el("svg",{viewBox:`0 0 ${W} ${H}`,role:"img"});host.appendChild(s);return s}
+function txt(s,x,y,str,o={}){const t=el("text",Object.assign({x,y,fill:C.ink,"font-size":13,"font-family":"JetBrains Mono, Menlo, monospace"},o),s);t.textContent=str;return t}
+function tip(host){const d=document.createElement("div");d.className="tip";d.hidden=true;host.appendChild(d);return{show(html,x,y){d.innerHTML=html;d.hidden=false;const w=host.clientWidth;d.style.left=Math.min(Math.max(0,x+14),w-290)+"px";d.style.top=(y-10)+"px"},hide(){d.hidden=true}}}
+function star(cx,cy,r){let p="";for(let i=0;i<10;i++){const a=Math.PI/5*i-Math.PI/2,rr=i%2?r*0.45:r;p+=(i?"L":"M")+(cx+rr*Math.cos(a)).toFixed(1)+","+(cy+rr*Math.sin(a)).toFixed(1)}return p+"Z"}
+function scaleFor(host,s){return host.clientWidth/ s.viewBox.baseVal.width}
+
+// climb
+(function(){const host=document.getElementById("climb"),W=940,H=470,L=60,R=30,T=20,B=50,s=svg(host,W,H),tp=tip(host);
+const x=i=>L+i*(W-L-R)/(RUNS.length-1),ly=v=>Math.log(v),y=v=>T+(H-T-B)*(1-(ly(v)-ly(4.5))/(ly(140)-ly(4.5)));
+el("line",{x1:L,y1:T,x2:L,y2:H-B,stroke:C.ink},s);el("line",{x1:L,y1:H-B,x2:W-R,y2:H-B,stroke:C.ink},s);
+[5,10,20,50,100].forEach(v=>{el("line",{x1:L-6,x2:L,y1:y(v),y2:y(v),stroke:C.ink},s);txt(s,L-10,y(v)+4,v,{"text-anchor":"end"})});
+RUNS.forEach((r,i)=>{el("line",{x1:x(i),x2:x(i),y1:H-B,y2:H-B+6,stroke:C.ink},s);txt(s,x(i),H-B+22,i,{"text-anchor":"middle"})});
+txt(s,(L+W-R)/2,H-6,"Benchmark run",{"text-anchor":"middle","font-family":"Inter, system-ui","fill":C.ink2});
+let best=0,d="";RUNS.forEach((r,i)=>{if(r[0]!=="DISCARD")best=r[1];d+=(i?`H${x(i)}V${y(best)}`:`M${x(i)},${y(best)}`)});
+el("path",{d,fill:"none",stroke:C.ours,"stroke-width":2.2,class:"draw"},s);
+RUNS.forEach((r,i)=>{const kept=r[0]!=="DISCARD";const g=el("g",{},s);
+ if(kept)el("path",{d:star(x(i),y(r[1]),11),fill:C.ours,stroke:"#000","stroke-width":1.5},g);else el("circle",{cx:x(i),cy:y(r[1]),r:6,fill:"#000",stroke:C.muted,"stroke-width":2},g);
+ const hit=el("circle",{cx:x(i),cy:y(r[1]),r:16,fill:"transparent"},g);
+ const on=e=>{const k=scaleFor(host,s);tp.show(`<b>${r[1].toFixed(2)} tok/s</b> · ${kept?"kept":"discarded"}<br>${r[2]}`,x(i)*k,y(r[1])*k)};
+ hit.addEventListener("pointerenter",on);hit.addEventListener("pointerleave",()=>tp.hide())});
+txt(s,x(12)-8,y(98.09)-18,"98.1",{fill:C.ours,"text-anchor":"end","font-size":15})})();
+
+// vs vLLM
+(function(){const host=document.getElementById("vs"),W=940,H=300,L=300,R=90,T=10,B=48,s=svg(host,W,H),tp=tip(host);
+const items=[["Our engine: start (plain PyTorch)",6.1,6.1,C.violet],["Our engine: after autoresearch",96,96,C.ours],["Our engine + DSpark",79.6,111,C.ours],["vLLM + DSpark (community, patched)",196,407,C.vllm]];
+const x=v=>L+v*(W-L-R)/450,row=(H-T-B)/items.length;
+el("line",{x1:L,y1:T,x2:L,y2:H-B,stroke:C.ink},s);el("line",{x1:L,y1:H-B,x2:W-R,y2:H-B,stroke:C.ink},s);
+[0,100,200,300,400].forEach(v=>{el("line",{x1:x(v),x2:x(v),y1:H-B,y2:H-B+6,stroke:C.ink},s);txt(s,x(v),H-B+22,v,{"text-anchor":"middle"})});
+items.forEach((it,i)=>{const cy=T+row*(i+.5),g=el("g",{},s);
+ txt(s,L-14,cy+4,it[0],{"text-anchor":"end","font-family":"Inter, system-ui","font-size":14});
+ if(it[2]>it[1])el("line",{x1:x(it[1]),x2:x(it[2]),y1:cy,y2:cy,stroke:it[3],"stroke-width":10},g);
+ el("circle",{cx:x((it[1]+it[2])/2),cy,r:7,fill:it[2]>it[1]?"#000":it[3],stroke:it[3],"stroke-width":2.5},g);
+ txt(s,x(it[2])+12,cy+4,it[2]>it[1]?`${it[1]}–${it[2]}`:`${it[1]}`,{fill:C.ink2});
+ const hit=el("rect",{x:x(it[1])-12,y:cy-16,width:Math.max(24,x(it[2])-x(it[1])+24),height:32,fill:"transparent"},g);
+ hit.addEventListener("pointerenter",()=>{const k=scaleFor(host,s);tp.show(`<b>${it[2]>it[1]?it[1]+"–"+it[2]:it[1]} tok/s</b><br>${it[0]}`,x(it[2])*k,cy*k)});hit.addEventListener("pointerleave",()=>tp.hide())})})();
+
+// DSpark
+(function(){const host=document.getElementById("dspark"),W=940,H=380,L=60,R=70,T=14,B=50,s=svg(host,W,H),tp=tip(host);
+const D=[["code",C.ours,[93,82,73,62,54,45,36]],["reasoning",C.violet,[74,54,39,30,22,14,8]],["long",C.green,[72,46,27,16,8,2,0]],["chat",C.vllm,[57,30,13,8,3,1,0]]];
+document.getElementById("dlegend").innerHTML=D.map(d=>`<span><i style="background:${d[1]}"></i>${d[0]}</span>`).join("");
+const x=i=>L+i*(W-L-R)/6,y=v=>T+(H-T-B)*(1-v/100);
+el("line",{x1:L,y1:T,x2:L,y2:H-B,stroke:C.ink},s);el("line",{x1:L,y1:H-B,x2:W-R,y2:H-B,stroke:C.ink},s);
+[0,20,40,60,80,100].forEach(v=>{el("line",{x1:L-6,x2:L,y1:y(v),y2:y(v),stroke:C.ink},s);txt(s,L-10,y(v)+4,v+"%",{"text-anchor":"end"})});
+for(let i=0;i<7;i++){el("line",{x1:x(i),x2:x(i),y1:H-B,y2:H-B+6,stroke:C.ink},s);txt(s,x(i),H-B+22,i+1,{"text-anchor":"middle"})}
+txt(s,(L+W-R)/2,H-6,"Draft position",{"text-anchor":"middle","font-family":"Inter, system-ui",fill:C.ink2});
+D.forEach(([n,c,v])=>{el("polyline",{points:v.map((a,i)=>x(i)+","+y(a)).join(" "),fill:"none",stroke:c,"stroke-width":2.2},s);
+ v.forEach((a,i)=>{const g=el("g",{},s);el("circle",{cx:x(i),cy:y(a),r:5,fill:c,stroke:"#000","stroke-width":1.5},g);
+  const hit=el("circle",{cx:x(i),cy:y(a),r:12,fill:"transparent"},g);hit.addEventListener("pointerenter",()=>{const k=scaleFor(host,s);tp.show(`<b>${a}%</b> accepted · ${n}<br>draft position ${i+1}`,x(i)*k,y(a)*k)});hit.addEventListener("pointerleave",()=>tp.hide())});
+ if(v[6]>0)txt(s,x(6)+12,y(v[6])+4,v[6]+"%",{fill:c})})})();
+
+// breakdown
+(function(){const host=document.getElementById("brk"),W=940,H=250,L=330,R=90,T=6,B=40,s=svg(host,W,H);
+const P=[["small fp32 GEMVs (attention, controllers, router)",2.95],["FP8 dense projections",2.51],["~1,570 small compiled kernels",2.27],["packed NVFP4 experts",2.06],["top-k + sort",0.38]];
+const x=v=>L+v*(W-L-R)/3.5,row=(H-T-B)/P.length;
+el("line",{x1:L,y1:T,x2:L,y2:H-B,stroke:C.ink},s);el("line",{x1:L,y1:H-B,x2:W-R,y2:H-B,stroke:C.ink},s);
+[0,1,2,3].forEach(v=>{el("line",{x1:x(v),x2:x(v),y1:H-B,y2:H-B+6,stroke:C.ink},s);txt(s,x(v),H-B+22,v+" ms",{"text-anchor":"middle"})});
+P.forEach(([n,v],i)=>{const cy=T+row*(i+.5);txt(s,L-14,cy+4,n,{"text-anchor":"end","font-family":"Inter, system-ui","font-size":14});
+ el("rect",{x:L,y:cy-row*.3,width:x(v)-L,height:row*.6,rx:4,fill:C.ours},s);txt(s,x(v)+10,cy+4,v.toFixed(2)+" ms",{fill:C.ink2})})})();
+
+// table
+document.querySelector("#runs tbody").innerHTML=RUNS.map((r,i)=>`<tr><td class="num">${i}</td><td><span class="pill ${r[0]==="DISCARD"?"disc":"keep"}">${r[0]==="DISCARD"?"discarded":r[0]==="BASELINE"?"baseline":"kept"}</span></td><td class="num">${r[1].toFixed(2)}</td><td>${r[2]}</td></tr>`).join("");
+</script>

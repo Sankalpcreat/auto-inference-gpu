@@ -22,8 +22,8 @@ Half the experiments failed, and each failure is in the log with the reason.
 Honest status: one forward pass now costs about the same as vLLM's on this GPU family; vLLM with speculation is still 2–4× ahead
 on single-user decode. The remaining gap is the speculative step's overhead, and it's measured.
 
-Repo, charts, every run: <link>
-Results page: <link>
+Repo, charts, every run: https://github.com/Sankalpcreat/auto-inference-gpu
+Results page: https://claude.ai/artifact/WXxhSvdg767hn6x79ZU7ii
 
 #inference #LLM #GPU #AIagents #autoresearch #ClaudeCode
 
