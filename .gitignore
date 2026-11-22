@@ -1,8 +1,5 @@
-results.tsv
-runs/
 logs/
 report/
-notes.md
 scratch/
 __pycache__/
 .venv/

@@ -1,0 +1,14 @@
+id	commit	status	score_tps	noise	eval	nll_ratio	long_ttft_ms	peak_gb	description
+20261121-170149	01e1318	BASELINE	6.1	0.0057	12/12	1.0	1078.9	56.3	baseline: engine v1 eager PyTorch, BF16 dequant experts, per-expert python loop, fp32 attention
+20261121-171005	c7c5b07	KEEP	9.24	0.0054	12/12	1.0	1081.1	56.3	sync-free MoE T=1: Triton grouped GEMV on top-8 ids, no host syncs
+20261121-171623	532a4eb	KEEP	11.83	0.0033	12/12	1.0	1103.4	56.3	static fp32 KV buffers + windowed GQA matmul attention at T=1 + vectorized T=1 convs
+20261121-172313	61e5b9f	KEEP	31.74	0.0031	12/12	1.0	1116.6	56.3	whole-step CUDA graph: static ring/bucketed KV, device pos, static conv hist
+20261121-174035	a4b5e1b	KEEP	64.52	0.0036	12/12	1.0	1109.9	56.3	torch.compile T=1 regions (attn, attn_res, stacked blend, router/act, convs) inside step graph
+20261121-174810	443d624	KEEP	78.96	0.0152	12/12	1.0	1114.4	71.9	packed NVFP4/MXFP8 expert grouped GEMV at T=1 (in-register dequant, exact vs BF16 path)
+20261121-175528	c17841a	KEEP	92.33	0.0077	12/12	0.9964	1252.4	73.0	FP8 weight-only dense projections (fused q|r|gate|sink GEMV) + FP8 unembed at T=1, per-row scale
+20261121-195133	cbf2ff6	DISCARD	95.07	0.0201	12/12	0.9964	1240.7	73.0	FP8 dense GEMV retune BLOCK_N=8 BK=128 8 warps (in-graph sweep; split-K lost)
+20261121-195616	a26360b	DISCARD	92.23	0.0069	12/12	0.9964	1105.2	72.7	fused bf16 decode attention (Triton split-key, bf16 K/V) + FP8 retune
+20261121-200234	8d83516	DISCARD	92.62	0.0059	12/12	0.9964	1116.2	72.9	bf16 loop-message controllers, gain|forget fused into one bmm
+20261121-200619	df2f16c	KEEP	95.98	0.0084	12/12	0.9964	1208.2	73.0	blend in 3 Triton kernels instead of inductor+3 cuBLAS bmm
+20261121-200818	4d0ebce	DISCARD	94.37	0.0043	12/12	0.9964	1131.9	73.0	FP8 dense GEMV retune small CFG (8,128,8) on top of Triton blend
+20261122-073558	9c56cbd	KEEP	98.09	0.0021	12/12	0.9964	1136.7	74.1	graphed spec decoding K=2: DSpark draft + M-row FP8 verify + packed experts + on-device commit, one graph per step

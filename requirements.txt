@@ -1,0 +1,8 @@
+# Engine + harness (developed on torch 2.11.0+cu130, Triton 3.6.0, RTX PRO 6000 Blackwell sm_120)
+torch>=2.11
+triton>=3.6
+safetensors>=0.4
+tokenizers>=0.19
+huggingface_hub>=0.25
+# launch/charts.py only
+matplotlib>=3.8

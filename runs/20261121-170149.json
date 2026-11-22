@@ -1,0 +1,125 @@
+{
+ "load_s": 4.6,
+ "workloads": {
+  "chat": {
+   "prompt_tokens": 15,
+   "ttft_ms": 407.0,
+   "decode_tps": 6.07,
+   "spread": 0.0039,
+   "deterministic": true,
+   "gen_len": 64,
+   "matches_golden_prefix": 64
+  },
+  "long": {
+   "prompt_tokens": 1261,
+   "ttft_ms": 1078.9,
+   "decode_tps": 6.15,
+   "spread": 0.0069,
+   "deterministic": true,
+   "gen_len": 64,
+   "matches_golden_prefix": 64
+  },
+  "code": {
+   "prompt_tokens": 21,
+   "ttft_ms": 461.6,
+   "decode_tps": 6.09,
+   "spread": 0.0044,
+   "deterministic": true,
+   "gen_len": 64,
+   "matches_golden_prefix": 64
+  },
+  "reasoning": {
+   "prompt_tokens": 32,
+   "ttft_ms": 505.4,
+   "decode_tps": 6.1,
+   "spread": 0.0095,
+   "deterministic": true,
+   "gen_len": 128,
+   "matches_golden_prefix": 128
+  }
+ },
+ "score_tps": 6.1,
+ "noise": 0.0057,
+ "gates": {
+  "deterministic (greedy)": true,
+  "fixed work (exact max_tokens)": true,
+  "eval >= golden - 1 (12/12 vs 12)": true,
+  "NLL within +2% of golden (ratio 1.0000)": true
+ },
+ "eval": [
+  {
+   "q": "Q: What is the capital of Japan?\nA:",
+   "a": " Tokyo, which is the largest city in",
+   "ok": true
+  },
+  {
+   "q": "Q: What is 17 + 25?\nA:",
+   "a": " 42. 17 + 25",
+   "ok": true
+  },
+  {
+   "q": "Q: What is the chemical symbol for gold?\nA:",
+   "a": " Au (from the Latin word 'aur",
+   "ok": true
+  },
+  {
+   "q": "Q: Who wrote Romeo and Juliet?\nA:",
+   "a": " William Shakespeare, a famous English playwright",
+   "ok": true
+  },
+  {
+   "q": "Q: How many days are in a leap year?\nA:",
+   "a": " 366 days (February has 29",
+   "ok": true
+  },
+  {
+   "q": "Q: What is the largest planet in the solar system?\nA:",
+   "a": " Jupiter, which is 11 times the",
+   "ok": true
+  },
+  {
+   "q": "Q: What is 12 times 12?\nA:",
+   "a": " 144 (12 x 12 =",
+   "ok": true
+  },
+  {
+   "q": "Q: On which continent is Kenya?\nA:",
+   "a": " Africa. Kenya is located in East Africa",
+   "ok": true
+  },
+  {
+   "q": "def add(a, b):\n    return",
+   "a": " a + b\n\ndef subtract",
+   "ok": true
+  },
+  {
+   "q": "Q: Which gas do plants absorb from the air for photosynthesis?\nA:",
+   "a": " Carbon dioxide (CO\u2082).\nExplanation:",
+   "ok": true
+  },
+  {
+   "q": "e noise.\n\n\nQ: What was the codename of the test lab in the article?\nA:",
+   "a": " BLUE HERON.\n\nQ: What did",
+   "ok": true
+  },
+  {
+   "q": "ng to the article, what was the average acceptance length for code?\nA:",
+   "a": " 2.7\n\nQ: What is the main bottleneck",
+   "ok": true
+  }
+ ],
+ "nll": [
+  1.3906521797180176,
+  0.24424561858177185,
+  1.2186068296432495,
+  1.185495138168335
+ ],
+ "nll_ratio": 1.0,
+ "eval_ok": "12/12",
+ "peak_gb": 56.3,
+ "id": "20261121-170149",
+ "commit": "01e1318",
+ "status": "BASELINE",
+ "description": "baseline: engine v1 eager PyTorch, BF16 dequant experts, per-expert python loop, fp32 attention",
+ "best_before": null
+}
