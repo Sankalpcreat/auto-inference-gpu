@@ -14,7 +14,7 @@ for i in $(seq 1 "$N"); do
   tail -6 "logs/agent_$i.log" | tee -a logs/loop.log
   # enforce KEEP/DISCARD on engine/ only: it must equal engine/ at the last KEEP/BASELINE commit in results.tsv
   KEEP=$(awk -F'\t' '$3=="KEEP"||$3=="BASELINE"{c=$2} END{print c}' results.tsv)
-  if [ -n "$KEEP" ] && ! git diff --quiet "$KEEP" -- engine; then
+  if [ -n "$KEEP" ] && { ! git diff --quiet "$KEEP" -- engine || [ -n "$(git ls-files --others --exclude-standard engine)" ]; }; then
     git add -A engine && git commit -q -m "wip (unkept)" 2>/dev/null; git branch -f "discarded/$(date +%m%d-%H%M%S)" HEAD
     git rm -r -q --cached engine >/dev/null; rm -rf engine; git checkout "$KEEP" -- engine && git add -A engine && git commit -q -m "loop: revert engine/ to last KEEP $KEEP"
     echo "loop: engine/ reverted to last KEEP $KEEP (unkept work saved on a discarded/ branch)" | tee -a logs/loop.log
