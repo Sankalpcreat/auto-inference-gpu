@@ -11,6 +11,12 @@ the GPU by the frozen harness `prepare_gpu.py`; KEEP/DISCARD decided by `decide.
 numerically faithful to it (the quality gates check).
 
 ## Ranked hypotheses (now 95.98 tok/s ≈ 10.4 ms/token; small-kernel tweaks are at diminishing returns: last 5 tries ≤ +4%)
+**NOW (supervisor, 2026-11-22): do stage B — port the DSpark drafter.** Stop optimizing the multi-token expert kernel:
+studies #19–#21 showed dedup can't beat T × `packed_gemv` (expert time is latency/dequant-bound). Accept verify(5) ≈ 1.8× a step.
+The deciding number is DSpark **acceptance on our engine**: tokens/step at K=1..7 per workload (≥ ~1.8 at K=4 pays off).
+Plan: restore stage A verify + rollback (`git show discarded/stageA-verify-rollback:engine/spec.py`), load `/tmp/inkling/mtp.safetensors`,
+port the drafter eager from `reference/vllm_inkling2/` (dspark.py, ops_dspark.py, test_dspark.py) + `knowledge/dspark.md`,
+feed it the target hidden states at visits 5, 23, 41 + final; measure acceptance by position, then a first end-to-end tok/s.
 **#1 is speculative decoding — read `knowledge/dspark.md` first.** Work through its stages A → B → C, one per experiment:
 A. T = K+1 verify step with per-visit rollback (K/V write positions, local ring buffers, conv histories) + an n-gram/prompt-lookup
    drafter with exact greedy verify. Report T(K+1)/T(1), accepted tokens/step per workload. CUDA-graph the verify step per K.
