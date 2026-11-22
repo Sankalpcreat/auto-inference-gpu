@@ -58,7 +58,7 @@ The list is a map, not a recipe: each item is a direction to measure, never a gu
 | 6 | Execution | yes | whole-step CUDA graph; torch.compile regions | 11.8→31.7→64.5 (KEEP) | done |
 | 7 | Kernels | yes | Triton MoE GEMV, packed GEMV, FP8 GEMV retune, split-K, fused attention, Triton blend | blend 92.3→96.0 (KEEP); retune +3% / split-K / fused attention (DISCARD) | in progress |
 | 8 | KV cache | yes | ring buffer (local), buckets (global), fp32→bf16 K/V | part of KEEPs; FP8 KV untried | partial |
-| 9 | Speculative decoding | yes | n-gram simulation (1.33 tok/step); verify(5) projected 1.37×; verify + rollback built, exact 64/64; tl.dot dedup T-row expert kernel wrong + 3.7× slower (#19); 3-D-broadcast row-block kernel exact (4e-7) but 3.5–4.7× slower than T × packed_gemv (#20) | use T × packed_gemv as the verify MoE (10.2 ms at T=5) or a row-outer kernel that re-reads weights from L2, then DSpark | in progress |
+| 9 | Speculative decoding | yes | n-gram simulation (1.33 tok/step); verify(5) projected 1.37×; verify + rollback built, exact 64/64; tl.dot dedup T-row expert kernel wrong + 3.7× slower (#19); 3-D-broadcast row-block kernel exact (4e-7) but 3.5–4.7× slower than T × packed_gemv (#20); row-outer L2-reuse kernel bit-exact but 1.08–1.7× slower (#21): dedup is a dead end | verify MoE = one 8T-row packed_gemv launch (~2 ms/row over 48 visits), then graphed verify step + DSpark | in progress |
 | 10 | Prefill | yes (~20× behind vLLM) | — | not in the score yet | todo |
 | 11 | Sparsity / adaptive passes | yes (varloop checkpoint) | — | — | todo |
 | 17 | Test-time compute policy | yes (reasoning_effort) | — | not in the score (raw completions) | todo |
