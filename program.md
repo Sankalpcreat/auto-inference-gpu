@@ -14,7 +14,8 @@ numerically faithful to it (the quality gates check).
 **NOW (supervisor, 2026-11-24): close the gap to ninfer (156 plain / 207 DSpark on this exact card; we are 96 / 98).**
 Read `knowledge/measured.md` "NEW TARGET" first. Ranked, one per experiment, each must pass the gates:
 1. **Multi-row verify for DSpark:** make the FP8 dense GEMV and the packed expert GEMV take up to 8 rows while reading each
-   weight tile ONCE (rows loop inside the program after the weight load; experts: group rows by expert). Goal: verify(K+1=3)
+   weight tile ONCE (rows loop inside the program after the weight load). DEAD END, do not retry: grouping rows by expert /
+   reading each distinct expert once (#19–#21, #26: 1.1–4.7× slower). For experts keep T × packed_gemv in one launch. Goal: verify(K+1=3)
    ≤ 1.4× a T=1 step → DSpark from +2% to +25%+. Measure verify cost first (scratch), then the harness with spec on.
 2. **Programmatic dependent launch** in the captured decode graph (Triton `launch_pdl=True` / gdc_wait like the vLLM ops in
    `reference/`; or cudaLaunchAttributeProgrammaticStreamSerialization): +5–8% expected.
@@ -30,7 +31,7 @@ Only if blocked on spec decoding: further kernel-count reduction (attn_res mix a
 see the newest `discarded/` branch; FP8 GEMV retune (8,128,8) is +3% stackable).
 
 ## How to run ONE experiment
-1. Read the files above. Don't repeat a dead end without a new reason.
+1. Read the files above, including the **Dead ends** in `knowledge/measured.md` and row 9+ of `CHECKLIST.md`, and grep `notes.md` for your idea before choosing it. Don't repeat a dead end without a new reason.
 2. Optional: ≤ 3 WebSearch/WebFetch on one technique; profiling scripts in `scratch/` via `tools/gpu_script.sh`.
 3. Write the hypothesis + expected gain in `notes.md` BEFORE running.
 4. Edit only files under `engine/` (keep the `engine/infer.py` contract), then `git add engine && git commit -q -m "<idea>"`.

@@ -71,7 +71,7 @@ for reading each expert once across draft tokens (all slower: expert time is lat
 | `prepare_gpu.py`, `decide.py`, `run_remote.sh`, `loop.sh` | referee, decision, remote runner, agent loop |
 | `program.md`, `knowledge/`, `CHECKLIST.md` | the agents' brief |
 | `reference/` | read-only DSpark reference code from vLLM PR #69028 (Apache-2.0) |
-| `launch/` | charts (`charts.py` regenerates them from `results.tsv`) |
+| `launch/` | charts (`charts.py` regenerates them from `research/results.tsv`) |
 
 ## Run it
 Needs one NVIDIA GPU with ≥ 80 GB (developed on an RTX PRO 6000, sm_120), PyTorch ≥ 2.11 + Triton ≥ 3.6, and the checkpoint:

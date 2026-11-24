@@ -19,6 +19,9 @@ for i in $(seq 1 "$N"); do
     git rm -r -q --cached engine >/dev/null; rm -rf engine; git checkout "$KEEP" -- engine && git add -A engine && git commit -q -m "loop: revert engine/ to last KEEP $KEEP"
     echo "loop: engine/ reverted to last KEEP $KEEP (unkept work saved on a discarded/ branch)" | tee -a logs/loop.log
   fi
+  # publish the research record (kept out of the agents' git resets): research/ = copy of results.tsv, runs/, notes.md
+  cp results.tsv notes.md research/ 2>/dev/null; cp -r runs research/ 2>/dev/null
+  git add research CHECKLIST.md && git commit -q -m "research log after experiment $i" 2>/dev/null
   if grep '"type":"result"' "logs/agent_$i.jsonl" | tail -1 | grep -qE '"api_error_status":429|"api_error":"usage_limit_reached"'; then
     echo "!!! usage limit — stopping; restart with ./loop.sh $((N - i + 1))" | tee -a logs/loop.log; exit 2; fi
   if grep -qE "REMOTE START FAILED|TIMEOUT after" logs/last_out.log 2>/dev/null; then

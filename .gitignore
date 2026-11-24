@@ -5,3 +5,6 @@ __pycache__/
 .venv/
 .molab
 .DS_Store
+results.tsv
+runs/
+notes.md
