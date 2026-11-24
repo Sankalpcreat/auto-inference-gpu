@@ -1,5 +1,13 @@
 # Measured facts (update as agents learn; dead ends at the bottom)
 
+## NEW TARGET (2026-11-24): ninfer on THIS card (RTX PRO 6000 Server Edition), github.com/iamwavecut/ninfer-all docs/inkling2.md
+| ninfer (C++/CUDA, ~4-bit GGUF UD-IQ4_XS incl. attention; NVFP4 experts) | plain 155.8–158 tok/s · DSpark 207.0 (1.33×, 2.08 tokens/round, text equal to plain) |
+| llama.cpp, same GGUF, same card | 84.4 tok/s |
+| Ours | plain 96.0 · DSpark 98.1 (verify step ~2.2× a T=1 step) |
+Their proven techniques: (1) vector kernels that multiply up to 8 token rows reading each weight once (cheap DSpark verify);
+(2) programmatic dependent launch in the decode graph (+8% on an RTX 5090: 199.4 → 216.0); (3) hand-fused kernels with an
+explicit rounding order so DSpark text equals plain decode; (4) ~4-bit dense weights (fewer bytes than our FP8).
+
 ## THE TARGET TO BEAT (same GPU family, measured by hyudryu/Inkling-2-Mini-2xRTXPro6000, patched vLLM, TP1, 2026-11-21)
 | vLLM TP1 | 1 user |
 |---|---|

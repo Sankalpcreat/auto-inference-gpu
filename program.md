@@ -11,16 +11,16 @@ the GPU by the frozen harness `prepare_gpu.py`; KEEP/DISCARD decided by `decide.
 numerically faithful to it (the quality gates check).
 
 ## Ranked hypotheses (now 95.98 tok/s ≈ 10.4 ms/token; small-kernel tweaks are at diminishing returns: last 5 tries ≤ +4%)
-**NOW (supervisor, 2026-11-22): finish speculative decoding — 2 experiments, then stop.**
-DSpark works end to end (#23: 2.66 tok/step at K=4) but output drifts from greedy. Code: `git show discarded/1122-071403:engine/spec.py` and
-`discarded/1122-071403:engine/dspark.py` (restore both).
-1. Log the top-2 logit gap where outputs split (tiny → precision, large → bug; fix a bug first).
-2. Build the verify step on the SAME kernels the T=1 decode uses (FP8 dense GEMV per row or small-batch FP8, `packed_gemv` per
-   (row, expert) in one launch, same attention path), CUDA-graphed per K. Bit-exact greedy match is NOT required: #24 showed every split is a near-tie (gap <= 0.29) and even the
-   normal graphed decode drifts from eager prefill; the harness gates (eval, NLL, determinism, fixed work) decide, as they did for the FP8 KEEP.
-   Speed matters: reuse the T=1 kernels so verify(K+1) costs ~1.4-1.8x a step.
-3. Run the harness with spec on (K=2 and K=4; pick the better). The gates still apply (golden prefix, eval, NLL, fixed work).
-Stop rule: if spec decoding can't reach ≥ ~130 tok/s with the gates passing in this experiment, record why and stop.
+**NOW (supervisor, 2026-11-24): close the gap to ninfer (156 plain / 207 DSpark on this exact card; we are 96 / 98).**
+Read `knowledge/measured.md` "NEW TARGET" first. Ranked, one per experiment, each must pass the gates:
+1. **Multi-row verify for DSpark:** make the FP8 dense GEMV and the packed expert GEMV take up to 8 rows while reading each
+   weight tile ONCE (rows loop inside the program after the weight load; experts: group rows by expert). Goal: verify(K+1=3)
+   ≤ 1.4× a T=1 step → DSpark from +2% to +25%+. Measure verify cost first (scratch), then the harness with spec on.
+2. **Programmatic dependent launch** in the captured decode graph (Triton `launch_pdl=True` / gdc_wait like the vLLM ops in
+   `reference/`; or cudaLaunchAttributeProgrammaticStreamSerialization): +5–8% expected.
+3. **Fewer kernels:** profile (2,783 kernels/step at 92 tok/s) and fuse the biggest latency-bound chains (attn_res mix + norm,
+   conv + residual, router + top-k) into single Triton kernels.
+4. **4-bit dense projections** (NVFP4 weight-only, per-16 block scales) — lossy, gated by NLL/eval: fewer bytes than FP8.
 **#1 is speculative decoding — read `knowledge/dspark.md` first.** Work through its stages A → B → C, one per experiment:
 A. T = K+1 verify step with per-visit rollback (K/V write positions, local ring buffers, conv histories) + an n-gram/prompt-lookup
    drafter with exact greedy verify. Report T(K+1)/T(1), accepted tokens/step per workload. CUDA-graph the verify step per K.
