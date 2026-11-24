@@ -9,6 +9,8 @@ import torch.nn.functional as F
 
 from .model_v0 import (ALPHA, DREL, EPS, GATE_CAP, H, HD, HKV, N_FLOOR, QK_CLIP, REL_CLIP, ROUTE_SCALE, TOPK,
                        UP_CAP, attn_res, l2_clip, rms)
+from .kv_dense import kv_dense
+from .mix_triton import mix, mix as mix_norm
 from .fp8_dense import fp8_gemv
 
 for _k, _v in (("cache_size_limit", 512), ("accumulated_cache_size_limit", 4096)):
@@ -70,8 +72,9 @@ def _attend(qc, rel_bias, K, V, gate, sinks, wo):
 @compile_
 def attn_local(xq, xk, xv, w, hk, hv, ha, K, V, slot, ldist, ladd):
     """Local layer decode attention + attn-output conv. Returns attn_out (1, D) bf16."""
-    k = _conv(_lin(xk, w, "wk"), hk, w["kT"])
-    v = _conv(_lin(xv, w, "wv"), hv, w["vT"])
+    kv = kv_dense(xk, xv, w["wk8"], w["wv8"], w["wks"], w["wvs"])
+    k = _conv(kv[0], hk, w["kT"])
+    v = _conv(kv[1], hv, w["vT"])
     qc, rc, gate, sinks, k, v = _qkv(xq, xk, xv, w, k, v)
     rel = torch.einsum("thd,de->the", rc.float(), w["relp"])
     K.index_copy_(1, slot, k.transpose(0, 1).float())
@@ -84,9 +87,10 @@ def attn_local(xq, xk, xv, w, hk, hv, ha, K, V, slot, ldist, ladd):
 @compile_
 def attn_global(xq, xk, xv, w, hk, hv, ha, K, V, pos, gidx, gmul, gadd):
     """Global layer decode attention over a static bucket of B = gidx.shape[0] keys + attn-output conv."""
+    kv = kv_dense(xk, xv, w["wk8"], w["wv8"], w["wks"], w["wvs"])
     B = gidx.shape[0]
-    k = _dyn_conv(_lin(xk, w, "wk"), hk, w["k_static"], (xk @ w["k_proj"].T).view(1, HKV, 4))
-    v = _dyn_conv(_lin(xv, w, "wv"), hv, w["v_static"], (xv @ w["v_proj"].T).view(1, HKV, 4))
+    k = _dyn_conv(kv[0], hk, w["k_static"], (xk @ w["k_proj"].T).view(1, HKV, 4))
+    v = _dyn_conv(kv[1], hv, w["v_static"], (xv @ w["v_proj"].T).view(1, HKV, 4))
     qc, rc, gate, sinks, k, v = _qkv(xq, xk, xv, w, k, v)
     tau = 1 + ALPHA * torch.log(torch.clamp((pos.float() + 1) / N_FLOOR, min=1.0))
     qc = (qc.float() * tau[:, None, None]).to(BF)
@@ -97,16 +101,6 @@ def attn_global(xq, xk, xv, w, hk, hv, ha, K, V, pos, gidx, gmul, gadd):
     bias = rel[0][:, gidx] * gmul + gadd
     a = _attend(qc, bias, K[:, :B], V[:, :B], gate, sinks, w)
     return _conv(a, ha, w["aT"])
-
-
-@compile_
-def mix(sources, queries):
-    return attn_res(sources, queries)
-
-
-@compile_
-def mix_norm(sources, queries, norm_w):
-    return attn_res(sources, queries, norm_w).to(BF)
 
 
 @compile_

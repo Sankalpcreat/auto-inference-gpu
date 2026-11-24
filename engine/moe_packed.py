@@ -20,7 +20,7 @@ def _e2m1(n):
 
 
 @triton.jit
-def _gemv_nvfp4(W, S, OUTER, X, IDS, OUT, N, K, stride_we, stride_wn, stride_se, stride_sn, stride_xj,
+def _gemv_nvfp4(W, S, OUTER, X, IDS, OUT, N, K: tl.constexpr, stride_we, stride_wn, stride_se, stride_sn, stride_xj,
                 BLOCK_N: tl.constexpr, BLOCK_B: tl.constexpr):
     # BLOCK_B packed bytes per iteration = 2 * BLOCK_B values
     j = tl.program_id(0)
@@ -31,17 +31,21 @@ def _gemv_nvfp4(W, S, OUTER, X, IDS, OUT, N, K, stride_we, stride_wn, stride_se,
     wbase = W + e * stride_we + offs_n[:, None].to(tl.int64) * stride_wn
     sbase = S + e * stride_se + offs_n[:, None].to(tl.int64) * stride_sn
     xbase = X + j * stride_xj
-    acc = tl.zeros([BLOCK_N], dtype=tl.float32)
+    acc = tl.zeros([BLOCK_N, BLOCK_B], dtype=tl.float32)
     for b0 in range(0, K // 2, BLOCK_B):
         offs_b = b0 + tl.arange(0, BLOCK_B)
         xe = tl.load(xbase + 2 * offs_b).to(tl.float32)
         xo = tl.load(xbase + 2 * offs_b + 1).to(tl.float32)
         w = tl.load(wbase + offs_b[None, :]).to(tl.int32)
-        s = tl.load(sbase + (offs_b // 8)[None, :]).to(tl.float32) * 16384.0
-        lo = ((_e2m1(w & 15) * s) * outer).to(tl.bfloat16).to(tl.float32)
-        hi = ((_e2m1(w >> 4) * s) * outer).to(tl.bfloat16).to(tl.float32)
-        acc += tl.sum(lo * xe[None, :] + hi * xo[None, :], 1)
-    tl.store(OUT + j * N + offs_n, acc)
+        s = tl.load(sbase + (offs_b // 8)[None, :]).to(tl.float32)
+        low, high = tl.inline_asm_elementwise(
+            "{ .reg .b8 byte0; .reg .b32 halves; mov.b32 {byte0, _, _, _}, $2; "
+            "cvt.rn.f16x2.e2m1x2 halves, byte0; mov.b32 {$0, $1}, halves; }",
+            constraints="=h,=h,r", args=[w], dtype=(tl.float16, tl.float16), is_pure=True, pack=1)
+        lo = ((low.to(tl.float32) * s) * outer).to(tl.bfloat16).to(tl.float32)
+        hi = ((high.to(tl.float32) * s) * outer).to(tl.bfloat16).to(tl.float32)
+        acc += lo * xe[None, :] + hi * xo[None, :]
+    tl.store(OUT + j * N + offs_n, tl.sum(acc, 1))
 
 
 @triton.jit

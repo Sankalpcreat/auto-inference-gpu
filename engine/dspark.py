@@ -146,6 +146,7 @@ class DSpark:
             self.V[i].index_copy_(0, pos, v.reshape(T, NKV, HD).contiguous())
 
     @torch.inference_mode()
+    @torch.compile(fullgraph=True, dynamic=False)
     def draft_g(self, anchor, p, K, B):
         """anchor (1,) at position p (1,) device; context keys from a static bucket of B positions (masked)."""
         from .fp8_dense import fp8_rows

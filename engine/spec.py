@@ -14,6 +14,7 @@ import torch.nn.functional as F
 
 from . import model_v1 as M1
 from . import fused_t1 as FT
+from .kv_dense import kv_dense
 from .fp8_dense import fp8_rows
 from .moe_packed import packed_gemv
 from .spec_commit import CommitBuffers
@@ -69,9 +70,10 @@ def _attend(qc, rel, idx, mul, add, K, V, gate, sinks, w, T):
 
 @compile_
 def attn_local(xq, xk, xv, w, hk, hv, ha, fk, fv, fa, K, V, kb, vb, idx, mul, add):
+    kv = kv_dense(xk, xv, w["wk8"], w["wv8"], w["wks"], w["wvs"])
     T = xq.shape[0]
-    full = torch.cat([hk, fp8_rows(xk, w["wk8"], w["wks"])]); fk.copy_(full); k = _conv(full, w["kT"])
-    full = torch.cat([hv, fp8_rows(xv, w["wv8"], w["wvs"])]); fv.copy_(full); v = _conv(full, w["vT"])
+    full = torch.cat([hk, kv[0]]); fk.copy_(full); k = _conv(full, w["kT"])
+    full = torch.cat([hv, kv[1]]); fv.copy_(full); v = _conv(full, w["vT"])
     qc, rc, gate, sinks, k, v = _qkv(xq, w, k, v, T)
     rel = torch.einsum("thd,de->the", rc.float(), w["relp"])
     kt, vt = k.transpose(0, 1).float(), v.transpose(0, 1).float()
@@ -83,10 +85,11 @@ def attn_local(xq, xk, xv, w, hk, hv, ha, fk, fv, fa, K, V, kb, vb, idx, mul, ad
 
 @compile_
 def attn_global(xq, xk, xv, w, hk, hv, ha, fk, fv, fa, K, V, qp, idx, mul, add):
+    kv = kv_dense(xk, xv, w["wk8"], w["wv8"], w["wks"], w["wvs"])
     T, B = xq.shape[0], idx.shape[1]
-    full = torch.cat([hk, fp8_rows(xk, w["wk8"], w["wks"])]); fk.copy_(full)
+    full = torch.cat([hk, kv[0]]); fk.copy_(full)
     k = _dyn_conv(full, w["k_static"], (xk @ w["k_proj"].T).view(T, HKV, 4))
-    full = torch.cat([hv, fp8_rows(xv, w["wv8"], w["wvs"])]); fv.copy_(full)
+    full = torch.cat([hv, kv[1]]); fv.copy_(full)
     v = _dyn_conv(full, w["v_static"], (xv @ w["v_proj"].T).view(T, HKV, 4))
     qc, rc, gate, sinks, k, v = _qkv(xq, w, k, v, T)
     tau = 1 + ALPHA * torch.log(torch.clamp((qp.float() + 1) / N_FLOOR, min=1.0))
