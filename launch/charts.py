@@ -47,30 +47,31 @@ def rows(path):
         return list(csv.DictReader(f, delimiter="\t"))
 
 
-gpu = rows(ROOT / "results.tsv")
+gpu = rows(ROOT / "research" / "results.tsv")
 SHORT = ["baseline: plain PyTorch", "sync-free MoE kernel", "static KV + windowed attn", "whole-step CUDA graph",
-         "torch.compile regions", "packed NVFP4 experts", "FP8 dense + unembed", "Triton loop-blend", "DSpark spec decoding"]
+         "torch.compile regions", "packed NVFP4 experts", "FP8 dense + unembed", "Triton loop-blend", "DSpark spec decoding",
+         "batched spec commit", "fused KV proj + residual mix"]
 
 # 1 — the climb (log scale), every run; kept = blue stars on the best-so-far line, discarded = grey rings
-fig, ax = plt.subplots(figsize=(11, 7.2)); fig.subplots_adjust(left=0.1, right=0.78, top=0.78, bottom=0.17)
-title(fig, "AI agents made our Inkling 2 Mini engine 16× faster",
+fig, ax = plt.subplots(figsize=(11, 7.2)); fig.subplots_adjust(left=0.1, right=0.7, top=0.78, bottom=0.17)
+title(fig, f"AI agents made our Inkling 2 Mini engine {max(float(r['score_tps']) for r in gpu if r['status']=='KEEP') / float(gpu[0]['score_tps']):.0f}× faster",
       "Decode tokens/s, 1 user, one RTX PRO 6000 · every benchmark run, measured by a frozen referee")
 best, xs_b, ys_b, k = 0, [], [], 0
 for i, r in enumerate(gpu):
     s = float(r["score_tps"])
     if r["status"] in ("BASELINE", "KEEP"):
         best = s; ax.scatter(i, s, marker="*", s=260, color=BLUE, zorder=4, edgecolors=BG, linewidths=1.2)
-        off = {6: (-10, 22), 7: (-30, 24), 8: (14, 0)}.get(k, (10, -4))
+        off = {6: (-10, 26), 7: (12, -18), 8: (-10, 44), 9: (-10, 24), 10: (14, 0)}.get(k, (10, -4))
         lab = SHORT[k] + (f"  {s:.1f}" if k == len(SHORT) - 1 else "")
         ax.annotate(lab, (i, s), xytext=off, textcoords="offset points", fontsize=11, va="center",
-                    color=BLUE if k == len(SHORT) - 1 else INK2, ha="right" if k == 6 else "left")
+                    color=BLUE if k == len(SHORT) - 1 else INK2, ha="right" if k in (6, 8, 9) else "left")
         k += 1
     else:
         ax.scatter(i, s, marker="o", s=70, facecolors="none", edgecolors=MUTED, linewidths=1.6, zorder=3)
     xs_b.append(i); ys_b.append(best)
 ax.step(xs_b, ys_b, where="post", color=BLUE, lw=2, zorder=2)
 ax.set_yscale("log"); ax.yaxis.set_major_locator(FixedLocator([5, 10, 20, 50, 100])); ax.yaxis.set_minor_locator(NullLocator())
-ax.set_yticklabels(["5", "10", "20", "50", "100"]); ax.set_ylim(4.5, 140)
+ax.set_yticklabels(["5", "10", "20", "50", "100"]); ax.set_ylim(4.5, 190)
 ax.set_xticks(range(len(gpu))); ax.set_xticklabels([str(i) for i in range(len(gpu))])
 ax.set_xlabel("Benchmark run", labelpad=12); ax.set_ylabel("Decode tokens / s", labelpad=12); mono_ticks(ax)
 leg = [Line2D([], [], marker="*", color=BLUE, lw=2, ms=15, label="Kept (beat the best by > max(1.5%, 2×noise), all quality gates pass)"),
@@ -82,8 +83,8 @@ save(fig, "01_climb")
 # 2 — vs vLLM on the same GPU family (range = vLLM prose…counting; dot = midpoint)
 fig, ax = plt.subplots(figsize=(11, 6.4)); fig.subplots_adjust(left=0.3, right=0.95, top=0.74, bottom=0.2)
 title(fig, "Where we stand against vLLM", "Single-user decode tokens/s on one RTX PRO 6000 Blackwell")
-items = [("Our engine: start (plain PyTorch)", 6.1, 6.1, VIOLET), ("Our engine: after autoresearch", 96.0, 96.0, BLUE),
-         ("Our engine + DSpark", 79.6, 111.0, BLUE), ("vLLM + DSpark (community, patched)", 196, 407, BROWN)]
+items = [("Our engine: start (plain PyTorch)", 6.1, 6.1, VIOLET), ("Our engine: best plain decode", 95.98, 95.98, BLUE),
+         ("Our engine + DSpark (latest)", 102.1, 139.8, BLUE), ("vLLM + DSpark (community, patched)", 196, 407, BROWN)]
 for y, (lab, lo, hi, c) in enumerate(reversed(items)):
     if hi > lo:
         ax.plot([lo, hi], [y, y], color=c, lw=9, solid_capstyle="butt", zorder=2)
@@ -96,7 +97,7 @@ ax.set_yticks(range(len(items))); ax.set_yticklabels([i[0] for i in reversed(ite
 ax.set_xlabel("Decode tokens / s (range = across workloads)", labelpad=12)
 for t in ax.get_xticklabels(): t.set_fontfamily(MONO)
 note(fig, "vLLM numbers: hyudryu/Inkling-2-Mini-2xRTXPro6000 (Workstation Edition, prose/coding/counting prompts, DSpark K=4).\n"
-          "Ours: Server Edition, our 4 workloads. Not a same-machine head-to-head yet; one forward pass costs about the same (~10 ms).")
+          "Ours: Server Edition, our 4 workloads, mean of 2 confirmation runs (124.0 overall). Not a same-machine head-to-head yet.")
 save(fig, "02_vs_vllm")
 
 # 3 — speed vs hours of autoresearch (like cost curves)
@@ -108,12 +109,12 @@ for r in gpu:
         h = (dt.datetime.strptime(r["id"], "%Y%m%d-%H%M%S") - t0).total_seconds() / 3600
         pts.append((h, best))
 fig, ax = plt.subplots(figsize=(11, 6.6)); fig.subplots_adjust(left=0.1, right=0.9, top=0.8, bottom=0.18)
-title(fig, "Most of the gain came in the first hour", "Best kept decode tokens/s vs wall-clock hours since the baseline")
+title(fig, "Most of the gain came in the first hour; the last 25% took days", "Best kept decode tokens/s vs wall-clock hours since the baseline")
 ax.plot([p[0] for p in pts], [p[1] for p in pts], color=BLUE, lw=2, marker="*", ms=15, mec=BG, mew=1.2)
 ax.text(pts[-1][0] + 0.2, pts[-1][1], f"{pts[-1][1]:.0f}", color=BLUE, fontfamily=MONO, va="center")
 ax.set_xlabel("Hours since baseline (includes a usage-limit pause and a sandbox restart)", labelpad=12)
-ax.set_ylabel("Decode tokens / s", labelpad=12); ax.set_ylim(0, 110); mono_ticks(ax)
-note(fig, "13 benchmark runs + 12 profiling studies; each experiment is one fresh Claude Code agent (~$1–1.5 of usage).")
+ax.set_ylabel("Decode tokens / s", labelpad=12); ax.set_ylim(0, 140); mono_ticks(ax)
+note(fig, f"{len(gpu)} benchmark runs + profiling studies; each experiment is one fresh coding-agent session (~$1–1.5 of usage).")
 save(fig, "03_hours")
 
 # 4 — kernels per decode step

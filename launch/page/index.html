@@ -48,12 +48,12 @@ footer{color:var(--muted);font-size:13px;border-top:1px solid var(--line);paddin
 
 <div class="wrap">
   <header>
-    <h1>AI agents made a day-old 26B model's engine 16× faster</h1>
+    <h1>AI agents made a brand-new 26B model's engine 20× faster</h1>
     <p class="lede">Inkling 2 Mini, a looped mixture-of-experts model released by Thinking Machines on 20 November 2026, running on our own engine on one NVIDIA RTX PRO 6000. Claude Code agents ran one experiment at a time; a frozen referee kept only changes that were faster and kept quality.</p>
     <div class="tiles">
       <div class="tile"><span>start, plain PyTorch</span><b>6.1 tok/s</b></div>
-      <div class="tile"><span>after autoresearch</span><b class="ours">98.1 tok/s</b></div>
-      <div class="tile"><span>speedup</span><b class="ours">16.1×</b></div>
+      <div class="tile"><span>after autoresearch</span><b class="ours">124.0 tok/s</b></div>
+      <div class="tile"><span>speedup</span><b class="ours">20.3×</b></div>
       <div class="tile"><span>kernels per token</span><b>22,760 → 2,783</b></div>
       <div class="tile"><span>quality, every kept run</span><b>12/12</b></div>
     </div>
@@ -71,7 +71,7 @@ footer{color:var(--muted);font-size:13px;border-top:1px solid var(--line);paddin
     <h2>Where we stand against vLLM</h2>
     <p class="sub">Single-user decode tokens/s. Bars span the range across workloads; dots mark the midpoint.</p>
     <div class="chart" id="vs"></div>
-    <p class="note">vLLM figures come from the community recipe hyudryu/Inkling-2-Mini-2xRTXPro6000 (Workstation Edition, prose/coding/counting prompts, DSpark K=4), not a same-machine run. One forward pass costs about the same in both engines (~10 ms); vLLM's lead is its cheaper speculative step.</p>
+    <p class="note">vLLM figures come from the community recipe hyudryu/Inkling-2-Mini-2xRTXPro6000 (Workstation Edition, prose/coding/counting prompts, DSpark K=4), not a same-machine run. Ours: mean of 2 confirmation runs, 124.0 overall. On this exact card a C++/CUDA engine (ninfer, ~4-bit weights) reports 156 plain and 207 with DSpark.</p>
   </section>
 
   <section>
@@ -79,7 +79,7 @@ footer{color:var(--muted);font-size:13px;border-top:1px solid var(--line);paddin
     <p class="sub">Cumulative acceptance by draft position, measured in our engine.</p>
     <div class="legend" id="dlegend"></div>
     <div class="chart" id="dspark"></div>
-    <p class="note">2.25 / 2.60 / 2.85 tokens per step at draft length 2 / 3 / 4. Speculative decoding is kept at 98.1 tok/s; each verify step still costs about 2.2× a normal step, which is the gap to close next.</p>
+    <p class="note">2.25 / 2.60 / 2.85 tokens per step at draft length 2 / 3 / 4. Batching the speculative commit and fusing the KV projections took the engine from 98.1 to 124.0 tok/s.</p>
   </section>
 
   <section>
@@ -108,7 +108,7 @@ footer{color:var(--muted);font-size:13px;border-top:1px solid var(--line);paddin
 
 <script>
 const C={ours:"#5b8def",vllm:"#b5683a",violet:"#9b7be8",green:"#4fa36b",ink:"#f2f2f2",ink2:"#b9b9bf",muted:"#6e6e74",line:"#2a2a2e"};
-const RUNS=[["BASELINE",6.1,"Baseline: engine v1, eager PyTorch, BF16-dequantized experts"],["KEEP",9.24,"Sync-free MoE: Triton grouped GEMV on the top-8 experts, no host syncs"],["KEEP",11.83,"Static K/V buffers + windowed attention for one token"],["KEEP",31.74,"Whole decode step captured in one CUDA graph"],["KEEP",64.52,"torch.compile of the per-token regions inside the graph"],["KEEP",78.96,"Packed NVFP4/MXFP8 experts, dequantized inside a Triton kernel"],["KEEP",92.33,"FP8 dense projections + FP8 output layer (quality-gated)"],["DISCARD",95.07,"FP8 GEMV tile retune (below the noise bar)"],["DISCARD",92.23,"Fused split-key decode attention (correct, not faster)"],["DISCARD",92.62,"BF16 loop-message controllers (latency-bound, +0.3%)"],["KEEP",95.98,"Loop-message blend in 3 Triton kernels"],["DISCARD",94.37,"FP8 GEMV retune on top of the Triton blend"],["KEEP",98.09,"DSpark speculative decoding, fully CUDA-graphed (K=2)"]];
+const RUNS=[["BASELINE",6.1,"Baseline: engine v1, eager PyTorch, BF16-dequantized experts"],["KEEP",9.24,"Sync-free MoE: Triton grouped GEMV on the top-8 experts, no host syncs"],["KEEP",11.83,"Static K/V buffers + windowed attention for one token"],["KEEP",31.74,"Whole decode step captured in one CUDA graph"],["KEEP",64.52,"torch.compile of the per-token regions inside the graph"],["KEEP",78.96,"Packed NVFP4/MXFP8 experts, dequantized inside a Triton kernel"],["KEEP",92.33,"FP8 dense projections + FP8 output layer (quality-gated)"],["DISCARD",95.07,"FP8 GEMV tile retune (below the noise bar)"],["DISCARD",92.23,"Fused split-key decode attention (correct, not faster)"],["DISCARD",92.62,"BF16 loop-message controllers (latency-bound, +0.3%)"],["KEEP",95.98,"Loop-message blend in 3 Triton kernels"],["DISCARD",94.37,"FP8 GEMV retune on top of the Triton blend"],["KEEP",98.09,"DSpark speculative decoding, fully CUDA-graphed (K=2)"],["DISCARD",57.59,"Grouped expert GEMV reading each expert once for all draft rows (4th time: dead end)"],["KEEP",105.06,"Batched speculative commit: conv history + KV ring in 2 kernels (mean of 2 runs)"],["KEEP",124.01,"Fused KV projections + residual mixing, FP4 expert accumulation, compiled drafter (mean of 2 confirmation runs: 120.46 / 127.57)"],["DISCARD",90.33,"Team Neon fused-kernel rewrite: correct, but slower end to end"]];
 const NS="http://www.w3.org/2000/svg";
 function el(t,a,p){const e=document.createElementNS(NS,t);for(const k in a)e.setAttribute(k,a[k]);p&&p.appendChild(e);return e}
 function svg(host,W,H){const s=el("svg",{viewBox:`0 0 ${W} ${H}`,role:"img"});host.appendChild(s);return s}
@@ -119,7 +119,7 @@ function scaleFor(host,s){return host.clientWidth/ s.viewBox.baseVal.width}
 
 // climb
 (function(){const host=document.getElementById("climb"),W=940,H=470,L=60,R=30,T=20,B=50,s=svg(host,W,H),tp=tip(host);
-const x=i=>L+i*(W-L-R)/(RUNS.length-1),ly=v=>Math.log(v),y=v=>T+(H-T-B)*(1-(ly(v)-ly(4.5))/(ly(140)-ly(4.5)));
+const x=i=>L+i*(W-L-R)/(RUNS.length-1),ly=v=>Math.log(v),y=v=>T+(H-T-B)*(1-(ly(v)-ly(4.5))/(ly(190)-ly(4.5)));
 el("line",{x1:L,y1:T,x2:L,y2:H-B,stroke:C.ink},s);el("line",{x1:L,y1:H-B,x2:W-R,y2:H-B,stroke:C.ink},s);
 [5,10,20,50,100].forEach(v=>{el("line",{x1:L-6,x2:L,y1:y(v),y2:y(v),stroke:C.ink},s);txt(s,L-10,y(v)+4,v,{"text-anchor":"end"})});
 RUNS.forEach((r,i)=>{el("line",{x1:x(i),x2:x(i),y1:H-B,y2:H-B+6,stroke:C.ink},s);txt(s,x(i),H-B+22,i,{"text-anchor":"middle"})});
@@ -131,11 +131,11 @@ RUNS.forEach((r,i)=>{const kept=r[0]!=="DISCARD";const g=el("g",{},s);
  const hit=el("circle",{cx:x(i),cy:y(r[1]),r:16,fill:"transparent"},g);
  const on=e=>{const k=scaleFor(host,s);tp.show(`<b>${r[1].toFixed(2)} tok/s</b> · ${kept?"kept":"discarded"}<br>${r[2]}`,x(i)*k,y(r[1])*k)};
  hit.addEventListener("pointerenter",on);hit.addEventListener("pointerleave",()=>tp.hide())});
-txt(s,x(12)-8,y(98.09)-18,"98.1",{fill:C.ours,"text-anchor":"end","font-size":15})})();
+txt(s,x(15)-8,y(124.01)-18,"124.0",{fill:C.ours,"text-anchor":"end","font-size":15})})();
 
 // vs vLLM
 (function(){const host=document.getElementById("vs"),W=940,H=300,L=300,R=90,T=10,B=48,s=svg(host,W,H),tp=tip(host);
-const items=[["Our engine: start (plain PyTorch)",6.1,6.1,C.violet],["Our engine: after autoresearch",96,96,C.ours],["Our engine + DSpark",79.6,111,C.ours],["vLLM + DSpark (community, patched)",196,407,C.vllm]];
+const items=[["Our engine: start (plain PyTorch)",6.1,6.1,C.violet],["Our engine: best plain decode",95.98,95.98,C.ours],["Our engine + DSpark (latest)",102.1,139.8,C.ours],["vLLM + DSpark (community, patched)",196,407,C.vllm]];
 const x=v=>L+v*(W-L-R)/450,row=(H-T-B)/items.length;
 el("line",{x1:L,y1:T,x2:L,y2:H-B,stroke:C.ink},s);el("line",{x1:L,y1:H-B,x2:W-R,y2:H-B,stroke:C.ink},s);
 [0,100,200,300,400].forEach(v=>{el("line",{x1:x(v),x2:x(v),y1:H-B,y2:H-B+6,stroke:C.ink},s);txt(s,x(v),H-B+22,v,{"text-anchor":"middle"})});

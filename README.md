@@ -2,7 +2,7 @@
 
 **AI agents wrote and optimized an inference engine for a model released the day before.**
 Our own engine for [Inkling 2 Mini](https://huggingface.co/thinkingmachines/Inkling-2-Mini) (Thinking Machines, 26.4B looped MoE,
-Apache 2.0) on one NVIDIA RTX PRO 6000 Blackwell, made **16× faster** by an autoresearch loop: Claude Code agents propose one change
+Apache 2.0) on one NVIDIA RTX PRO 6000 Blackwell, made **20× faster** by an autoresearch loop: Claude Code agents propose one change
 at a time, a frozen referee measures it, and only real, quality-preserving speedups are kept.
 
 ![The climb](launch/charts/01_climb.png)
@@ -10,10 +10,10 @@ at a time, a frozen referee measures it, and only real, quality-preserving speed
 | | |
 |---|---|
 | **Start** (plain PyTorch, correct, slow) | 6.1 tokens/s |
-| **After autoresearch** | **98.1 tokens/s (16.1×)** |
+| **After autoresearch** | **124.0 tokens/s (20.3×)**, mean of 2 confirmation runs (120.5 / 127.6) |
 | **Quality on every kept step** | 12/12 eval answers, perplexity within 0.4% of the reference engine, deterministic, fixed work |
 | **Runtime dependencies** | PyTorch + Triton only (no vLLM / SGLang) |
-| **Experiments** | 13 benchmark runs + 12 profiling studies, one fresh agent each (~$1–1.5 of agent usage per experiment) |
+| **Experiments** | 17 benchmark runs + ~15 profiling studies, one fresh coding-agent session each (~$1–1.5 of agent usage per experiment) |
 
 ## What the agents did (every step is a git commit + a measured run)
 | # | Kept change | tok/s | What it taught |
@@ -26,7 +26,9 @@ at a time, a frozen referee measures it, and only real, quality-preserving speed
 | 5 | Packed NVFP4/MXFP8 experts, unpacked inside a Triton kernel | 79.0 | experts read 3.4× fewer bytes, bit-identical to the BF16 path |
 | 6 | FP8 dense projections + FP8 output layer (gated by quality) | 92.3 | a lever vLLM doesn't use; NLL ratio 0.9964 |
 | 7 | Loop-message blend in 3 Triton kernels | 96.0 | small matmuls are latency-bound, not bandwidth-bound |
-| 8 | DSpark speculative decoding, fully CUDA-graphed (draft + verify + commit on GPU) | 98.1 | 2.3–2.9 tokens/step, but a verify step still costs ~2.2× a normal one |
+| 8 | DSpark speculative decoding, fully CUDA-graphed (draft + verify + commit on GPU) | 98.1 | 2.3–2.9 tokens/step, but a verify step still cost ~2.2× a normal one |
+| 9 | Batched speculative commit: conv history + KV ring in 2 kernels instead of ~624 | 105.1 | the commit, not the drafter, was eating the speculative gain |
+| 10 | Fused KV projections + residual mixing, FP4 expert accumulation, compiled drafter | **124.0** | 3-row KV projection 28.4 → 14.3 µs; confirmed control → candidate → candidate → control |
 
 Discarded experiments are kept on `discarded/*` branches: an FP8 GEMV retune, a fused split-key attention kernel, three designs
 for reading each expert once across draft tokens (all slower: expert time is latency/dequant-bound on this GPU), and more.
@@ -35,6 +37,7 @@ for reading each expert once across draft tokens (all slower: expert time is lat
 ![vs vLLM](launch/charts/02_vs_vllm.png)
 
 - **One forward pass costs about the same as vLLM's** (~10 ms) on this GPU family.
+- **Ours with DSpark: 102–140 tok/s by workload (124.0 overall).** Same card, a C++/CUDA engine (ninfer, ~4-bit weights) reports 156 plain / 207 with DSpark.
 - **vLLM + DSpark reaches 196–407 tok/s** (community measurement, [hyudryu/Inkling-2-Mini-2xRTXPro6000](https://github.com/hyudryu/Inkling-2-Mini-2xRTXPro6000),
   Workstation Edition, different prompts). Our speculative step overhead is the remaining gap. This is **not yet a same-machine head-to-head**.
 - Not covered by our benchmark (yet): prefill speed, long context, many concurrent users.
