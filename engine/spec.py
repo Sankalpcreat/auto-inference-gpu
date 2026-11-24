@@ -16,6 +16,7 @@ from . import model_v1 as M1
 from . import fused_t1 as FT
 from .fp8_dense import fp8_rows
 from .moe_packed import packed_gemv
+from .spec_commit import CommitBuffers
 from .model_v0 import (ALPHA, BLOCK, CORE, EXT, GLOBAL, H, HD, HKV, DREL, LOGIT_CAP, N_FLOOR, QK_CLIP, REL_CLIP,
                        ROUTE_SCALE, STREAMS, TOPK, VOCAB, WINDOW, attn_res, l2_clip, rms)
 
@@ -137,6 +138,7 @@ class Spec:
     def __init__(self, m, d):
         self.m, self.d = m, d
         self.graphs, self.bufs = {}, {}
+        self.commit_buffers = {}
         self.cap = 0
 
     def _sync_cap(self):
@@ -149,12 +151,16 @@ class Spec:
         if T in self.bufs:
             return self.bufs[T]
         m, out = self.m, []
+        histories, rings = [], []
         for (i, _), c in zip(M1.VISITS, m.cache["visits"]):
             b = {s: torch.empty(T + 3, c[s].shape[1], dtype=c[s].dtype, device=m.dev) for s in STREAMS}
+            histories.extend((b[s], c[s]) for s in STREAMS)
             if i not in GLOBAL:
                 b["kb"] = torch.empty(HKV, T, HD, device=m.dev)
                 b["vb"] = torch.empty(HKV, T, HD, device=m.dev)
+                rings.extend(((b["kb"], c["K"]), (b["vb"], c["V"])))
             out.append(b)
+        self.commit_buffers[T] = CommitBuffers(histories, rings)
         self.bufs[T] = out
         return out
 
@@ -174,13 +180,13 @@ class Spec:
         loc = (dist.clamp(0, EXT - 1), (dist < EXT).float(), torch.where(valid, zero, ninf))
         gd = qp[:, None] - m.ar[:B][None]
         glo = (gd.clamp(0, EXT - 1), (gd < EXT).float(), torch.where(gd >= 0, zero, ninf))
-        return qp, arT, loc, glo
+        return qp, loc, glo
 
     def verify(self, toks, T, B):
         """toks (T,) at positions pos..pos+T-1 -> (argmax (T,), feats (T, 4, D))."""
         m = self.m
         bufs = self._buffers(T)
-        qp, arT, loc, glo = self._ctx(T, B)
+        qp, loc, glo = self._ctx(T, B)
         x0 = (rms(m.embed[toks]) * m.embed_norm.float()).to(BF)
         stack, nb, prelude, bank, feats = [x0], 0, None, None, []
         for v, (i, p) in enumerate(M1.VISITS):
@@ -235,29 +241,17 @@ class Spec:
             stack = stack[:nb] + [new]
         h = FT.mix_norm(stack[:nb] + [stack[nb]], m.out_q, m.norm[None])[0]
         feats.append(h)
-        return logits_argmax(h, *m.unembed8), torch.stack(feats, 1), arT
-
-    def commit(self, n, T, arT):
-        m = self.m
-        idx3 = n + torch.arange(3, device=m.dev)
-        slots = torch.remainder(m.pos + arT, WINDOW)
-        keep = (arT < n)[None, :, None]
-        for (i, _), c, b in zip(M1.VISITS, m.cache["visits"], self.bufs[T]):
-            for s in STREAMS:
-                c[s].copy_(b[s].index_select(0, idx3))
-            if i not in GLOBAL:
-                c["K"].index_copy_(1, slots, torch.where(keep, b["kb"], c["K"].index_select(1, slots)))
-                c["V"].index_copy_(1, slots, torch.where(keep, b["vb"], c["V"].index_select(1, slots)))
+        return logits_argmax(h, *m.unembed8), torch.stack(feats, 1)
 
     def _step(self, K, B):
         m, d = self.m, self.d
         T = K + 1
         dr = d.draft_g(m.tok, m.pos, K, B)                           # (K,)
-        targ, feats, arT = self.verify(torch.cat([m.tok, dr]), T, B)
+        targ, feats = self.verify(torch.cat([m.tok, dr]), T, B)
         a = torch.cumprod((dr == targ[:K]).long(), 0).sum()
         n = a + 1
         d.append_g(feats, m.pos)
-        self.commit(n, T, arT)
+        self.commit_buffers[T].commit(n, m.pos)
         self.out[K][:T].copy_(targ)
         self.out[K][T] = n
         m.tok.copy_(targ.index_select(0, a.view(1)))
